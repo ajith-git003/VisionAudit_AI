@@ -1,0 +1,35 @@
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+.vscode/
+.idea/
+*.suo
+*.sln
+*.sw?
+
+# Node / Frontend
+node_modules/
+dist/
+dist-ssr/
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Python
+__pycache__/
+*.py[oc]
+build/
+wheels/
+*.egg-info
+.venv/
+.pytest_cache/
+
+# Environment / Secrets
+.env
+*.local
+
+# Data / Temp
+temp_video.mp4
+ComplianceQAPipeline/backend/data/*.pdf

@@ -1,0 +1,141 @@
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=Inter:wght@300;400;500;600;700&display=swap');
+@import "tailwindcss";
+
+/* ── Custom Theme (Tailwind v4 CSS-based config) ─────────────────────────── */
+@theme {
+  /* Brand palette */
+  --color-brand-navy: #1e3a8a;
+  --color-brand-blue: #1e40af;
+  --color-brand-azure: #2563eb;
+  --color-brand-cyan: #0891b2;
+  --color-brand-teal: #0e7490;
+
+  /* Dark surface */
+  --color-surface-bg: #050a1a;
+
+  /* Severity */
+  --color-severity-critical: #ef4444;
+  --color-severity-major: #f97316;
+  --color-severity-warning: #eab308;
+  --color-severity-minor: #3b82f6;
+
+  /* Typography */
+  --font-family-display: "Playfair Display", Georgia, serif;
+  --font-family-body: Inter, system-ui, sans-serif;
+
+  /* Custom animations */
+  --animate-float-slow: float-orb 10s ease-in-out infinite;
+  --animate-float-medium: float-orb 8s ease-in-out infinite;
+  --animate-float-fast: float-orb 9s ease-in-out infinite;
+  --animate-radar-pulse: radar-pulse 2s ease-out infinite;
+  --animate-progress: progress-fill 90s linear forwards;
+}
+
+/* ── Keyframes ────────────────────────────────────────────────────────────── */
+@keyframes float-orb {
+  0%, 100% { transform: translateY(0px) scale(1); }
+  50% { transform: translateY(-40px) scale(1.05); }
+}
+
+@keyframes radar-pulse {
+  0% { transform: scale(0.5); opacity: 1; }
+  100% { transform: scale(2.5); opacity: 0; }
+}
+
+@keyframes progress-fill {
+  0% { width: 0%; }
+  100% { width: 100%; }
+}
+
+/* ── Base Reset ───────────────────────────────────────────────────────────── */
+@layer base {
+  *, *::before, *::after {
+    box-sizing: border-box;
+  }
+
+  html {
+    scroll-behavior: smooth;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    margin: 0;
+    font-family: Inter, system-ui, sans-serif;
+    background-color: #050a1a;
+    color: #ffffff;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  button {
+    cursor: pointer;
+    border: none;
+    background: none;
+    font-family: inherit;
+  }
+}
+
+/* ── Component Utilities ──────────────────────────────────────────────────── */
+@layer components {
+  .glass-card {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+  }
+
+  .glass-nav {
+    background: rgba(255, 255, 255, 0.97);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  }
+
+  .glass-input {
+    background: rgba(0, 0, 0, 0.25);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: #ffffff;
+    transition: border-color 0.2s ease, background 0.2s ease;
+  }
+
+  .glass-input:focus {
+    outline: none;
+    border-color: rgba(255, 255, 255, 0.5);
+    background: rgba(0, 0, 0, 0.3);
+  }
+
+  .glass-input::placeholder {
+    color: rgba(255, 255, 255, 0.3);
+  }
+
+  .radar-glow {
+    background: radial-gradient(
+      circle,
+      rgba(37, 99, 235, 0.4) 0%,
+      rgba(14, 116, 144, 0.2) 40%,
+      transparent 70%
+    );
+  }
+
+  .hero-gradient {
+    background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 25%, #2563eb 50%, #0891b2 75%, #0e7490 100%);
+  }
+
+  .text-gradient-blue {
+    background: linear-gradient(90deg, #93c5fd, #67e8f9);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 4px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.05);
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 2px;
+  }
+}
