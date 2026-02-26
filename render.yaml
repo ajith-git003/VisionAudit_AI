@@ -1,0 +1,36 @@
+services:
+  - type: web
+    name: vision-audit-backend
+    env: python
+    region: singapore
+    plan: free
+    rootDir: ComplianceQAPipeline
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn backend.src.api.server:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.13.0"
+      - key: AZURE_OPENAI_API_KEY
+        sync: false
+      - key: AZURE_SEARCH_API_KEY
+        sync: false
+      - key: AZURE_VI_API_KEY
+        sync: false
+      - key: AZURE_STORAGE_CONNECTION_STRING
+        sync: false
+      - key: AZURE_OPENAI_ENDPOINT
+        sync: false
+      - key: AZURE_OPENAI_API_VERSION
+        sync: false
+      - key: AZURE_OPENAI_DEPLOYMENT_NAME
+        sync: false
+      - key: AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT_NAME
+        sync: false
+      - key: AZURE_AI_SEARCH_ENDPOINT
+        sync: false
+      - key: AZURE_SEARCH_INDEX_NAME
+        sync: false
+      - key: AZURE_VIDEO_INDEXER_ACCOUNT_ID
+        sync: false
+      - key: AZURE_VIDEO_INDEXER_LOCATION
+        sync: false

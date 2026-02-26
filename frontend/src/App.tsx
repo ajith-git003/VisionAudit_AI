@@ -102,8 +102,9 @@ export default function App() {
 
       try {
         // 12-minute timeout — the pipeline can take up to 10 minutes
+        const apiBase = import.meta.env.VITE_API_URL || '/api';
         const response = await axios.post<AuditResponse>(
-          '/api/audit',
+          `${apiBase}/audit`,
           { video_url: url },
           {
             timeout: 720_000,
