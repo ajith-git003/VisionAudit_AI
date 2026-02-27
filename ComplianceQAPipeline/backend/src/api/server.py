@@ -195,7 +195,22 @@ def debug_transcript(url: str):
             "detail": str(e)
         }
 
-    # Test 4: Azure Video Indexer credentials
+    # Test 4: Piped proxy stream URL
+    try:
+        svc4 = VideoIndexerService()
+        stream_url = svc4.get_stream_url_via_piped(url)
+        results["piped_stream_url"] = {
+            "status": "ok",
+            "url_preview": stream_url[:120] + "..."
+        }
+    except Exception as e:
+        results["piped_stream_url"] = {
+            "status": "error",
+            "error": type(e).__name__,
+            "detail": str(e)
+        }
+
+    # Test 5: Azure Video Indexer credentials
     try:
         svc = VideoIndexerService()
         token = svc.get_account_access_token()
