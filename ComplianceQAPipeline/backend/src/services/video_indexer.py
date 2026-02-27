@@ -87,6 +87,21 @@ class VideoIndexerService:
             logger.error(f"youtube-transcript-api error for {video_id}: {type(e).__name__}: {e}")
             return ""
 
+    def _get_ytdlp_cookie_opts(self, tmpdir: str) -> dict:
+        '''
+        If YOUTUBE_COOKIES env var is set (Netscape cookie file contents),
+        writes it to a temp file and returns the yt-dlp cookiefile option.
+        This bypasses YouTube's bot detection on cloud server IPs.
+        '''
+        cookies_content = os.getenv("YOUTUBE_COOKIES", "")
+        if not cookies_content:
+            return {}
+        cookie_path = os.path.join(tmpdir, "yt_cookies.txt")
+        with open(cookie_path, "w", encoding="utf-8") as f:
+            f.write(cookies_content)
+        logger.info("Using YOUTUBE_COOKIES for yt-dlp authentication")
+        return {"cookiefile": cookie_path}
+
     def fetch_subtitles_via_ytdlp(self, url: str) -> str:
         '''
         Downloads subtitle/caption files only via yt-dlp (skip_download=True).
@@ -131,6 +146,7 @@ class VideoIndexerService:
                 'outtmpl': os.path.join(tmpdir, '%(id)s.%(ext)s'),
                 'quiet': True,
                 'extractor_args': {'youtube': {'player_client': ['ios', 'mweb']}},
+                **self._get_ytdlp_cookie_opts(tmpdir),
             }
             try:
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -171,25 +187,27 @@ class VideoIndexerService:
     #function to download youtube video using yt-dlp
     def download_youtube_video(self, url, output_path="temp_video.mp4"):
         '''downloads the youtube video to a local file'''
+        import tempfile as _tempfile
+
         logger.info(f"Downloading video from {url}...")
 
-        ydl_opts = {
-            'format': 'best',
-            'outtmpl': output_path,
-            'quiet': False,
-            'no_warnings': False,
-            'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
-            'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        # Keep tmpdir alive for the duration of the download so cookie file persists
+        with _tempfile.TemporaryDirectory() as _tmpdir:
+            ydl_opts = {
+                'format': 'bestaudio/best',
+                'outtmpl': output_path,
+                'quiet': False,
+                'no_warnings': False,
+                'extractor_args': {'youtube': {'player_client': ['ios', 'web']}},
+                **self._get_ytdlp_cookie_opts(_tmpdir),
             }
-        }
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([url])
-            logger.info("Video downloaded successfully")
-            return output_path
-        except Exception as e:
-            raise Exception(f"Failed to download video: {str(e)}")
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    ydl.download([url])
+                logger.info("Video downloaded successfully")
+                return output_path
+            except Exception as e:
+                raise Exception(f"Failed to download video: {str(e)}")
 
     #Upload the video to Azure Video Indexer
     def upload_video(self, video_path, video_name):

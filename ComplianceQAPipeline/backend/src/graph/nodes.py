@@ -44,21 +44,42 @@ def index_video_node(state: VideoAuditState) -> Dict[str, Any]:
 
     vi_service = VideoIndexerService()
 
-    # Step 1: youtube-transcript-api (fetches caption XML, no video download)
+    # Step 1: youtube-transcript-api (for videos that have captions — no download needed)
     transcript = vi_service.fetch_youtube_transcript(video_url)
 
-    # Step 2: yt-dlp subtitle-only download (no video, just VTT file) as fallback
+    # Step 2: yt-dlp subtitle-only (no video download, just VTT caption file)
     if not transcript:
-        logger.info("[Node:Indexer] Trying yt-dlp subtitle-only download as fallback...")
+        logger.info("[Node:Indexer] No captions found, trying yt-dlp subtitle download...")
         transcript = vi_service.fetch_subtitles_via_ytdlp(video_url)
 
     ocr_lines = []
     video_metadata = {"platform": "youtube"}
 
+    # Step 3: Full audio download → Azure Video Indexer (handles videos with no captions at all)
+    # Requires YOUTUBE_COOKIES env var on the server to bypass YouTube bot detection.
+    if not transcript:
+        logger.info("[Node:Indexer] No subtitles found, trying full download → Azure Video Indexer...")
+        local_filename = "temp_audit_video"
+        try:
+            local_path = vi_service.download_youtube_video(video_url, output_path=local_filename)
+            azure_video_id = vi_service.upload_video(local_path, video_name=video_id_input if 'video_id_input' in dir() else "audit")
+            logger.info(f"[Node:Indexer] Azure VI upload success. ID: {azure_video_id}")
+            if os.path.exists(local_path):
+                os.remove(local_path)
+            raw_insights = vi_service.wait_for_processing(azure_video_id)
+            clean_data = vi_service.extract_data(raw_insights)
+            transcript = clean_data.get("transcript", "")
+            ocr_lines = clean_data.get("ocr_text", [])
+            video_metadata = clean_data.get("video_metadata", video_metadata)
+            logger.info("---[Node:Indexer] Azure Video Indexer extraction complete ---")
+        except Exception as e:
+            logger.error(f"[Node:Indexer] Full download + Azure VI failed: {type(e).__name__}: {e}")
+
     if not transcript and not ocr_lines:
         logger.error("[Node:Indexer] No content extracted from any source.")
         return {
-            "error": ["No transcript or OCR text could be extracted from this video."],
+            "error": ["No transcript or on-screen text could be extracted. "
+                      "Set the YOUTUBE_COOKIES environment variable on the server to enable audio transcription for videos without captions."],
             "final_status": "FAIL",
             "transcript": "",
             "ocr_text": []
