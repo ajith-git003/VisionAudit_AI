@@ -31,7 +31,6 @@ def index_video_node(state: VideoAuditState) -> Dict[str, Any]:
        Falls back gracefully if Azure VI upload fails.
     '''
     video_url = state.get("video_url")
-    video_id_input = state.get("video_id", "vid_demo")
 
     logger.info(f"----[Node:Indexer] Processing: {video_url}")
 
@@ -45,34 +44,16 @@ def index_video_node(state: VideoAuditState) -> Dict[str, Any]:
 
     vi_service = VideoIndexerService()
 
-    # Step 1: Fetch transcript via youtube-transcript-api (cloud-safe, no download)
-    transcript = ""
-    try:
-        transcript = vi_service.fetch_youtube_transcript(video_url)
-        if transcript:
-            logger.info(f"[Node:Indexer] Transcript fetched via youtube-transcript-api ({len(transcript)} chars)")
-        else:
-            logger.warning("[Node:Indexer] No transcript returned by youtube-transcript-api")
-    except Exception as e:
-        logger.warning(f"[Node:Indexer] youtube-transcript-api error: {e}")
+    # Step 1: youtube-transcript-api (fetches caption XML, no video download)
+    transcript = vi_service.fetch_youtube_transcript(video_url)
 
-    # Step 2: Upload to Azure Video Indexer via URL for OCR (no local download)
+    # Step 2: yt-dlp subtitle-only download (no video, just VTT file) as fallback
+    if not transcript:
+        logger.info("[Node:Indexer] Trying yt-dlp subtitle-only download as fallback...")
+        transcript = vi_service.fetch_subtitles_via_ytdlp(video_url)
+
     ocr_lines = []
     video_metadata = {"platform": "youtube"}
-    try:
-        azure_video_id = vi_service.upload_video_by_url(video_url, video_name=video_id_input)
-        logger.info(f"[Node:Indexer] Azure VI upload success. ID: {azure_video_id}")
-        raw_insights = vi_service.wait_for_processing(azure_video_id)
-        clean_data = vi_service.extract_data(raw_insights)
-        # Use Azure VI transcript only if youtube-transcript-api returned nothing
-        if not transcript and clean_data.get("transcript"):
-            transcript = clean_data["transcript"]
-            logger.info("[Node:Indexer] Using transcript from Azure Video Indexer as fallback")
-        ocr_lines = clean_data.get("ocr_text", [])
-        video_metadata = clean_data.get("video_metadata", video_metadata)
-        logger.info("---[Node:Indexer] Azure Video Indexer extraction complete ---")
-    except Exception as e:
-        logger.warning(f"[Node:Indexer] Azure Video Indexer unavailable, continuing with transcript only: {e}")
 
     if not transcript and not ocr_lines:
         logger.error("[Node:Indexer] No content extracted from any source.")

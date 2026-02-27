@@ -36,51 +36,115 @@ class VideoIndexerService:
     def fetch_youtube_transcript(self, url: str) -> str:
         '''
         Fetches the YouTube video transcript using youtube-transcript-api.
-        This works reliably on cloud servers (no video download required).
+        Works reliably on cloud servers (no video download required).
         Returns a timestamped transcript string, or empty string if unavailable.
+
+        Handles both dict-style (v0.5.x) and object-style (v0.6.x) snippet responses.
         '''
         from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound, TranscriptsDisabled
         import re as _re
 
+        def _snippet_to_line(entry) -> str:
+            # v0.6.x returns FetchedTranscriptSnippet objects; v0.5.x returns dicts
+            if isinstance(entry, dict):
+                seconds = int(entry.get("start", 0))
+                text = entry.get("text", "")
+            else:
+                seconds = int(getattr(entry, "start", 0))
+                text = getattr(entry, "text", "")
+            mm, ss = seconds // 60, seconds % 60
+            return f"[{mm:02d}:{ss:02d}] {text}"
+
         # Extract video ID from URL
         match = _re.search(r"(?:v=|youtu\.be/)([A-Za-z0-9_-]{11})", url)
         if not match:
-            logger.warning("Could not extract video ID from URL: %s", url)
+            logger.error("Could not extract video ID from URL: %s", url)
             return ""
 
         video_id = match.group(1)
         logger.info(f"Fetching transcript for YouTube video ID: {video_id}")
 
         try:
-            transcript_list = YouTubeTranscriptApi.get_transcript(video_id, languages=["en", "en-US", "en-GB"])
-            lines = []
-            for entry in transcript_list:
-                seconds = int(entry["start"])
-                mm = seconds // 60
-                ss = seconds % 60
-                lines.append(f"[{mm:02d}:{ss:02d}] {entry['text']}")
-            return "\n".join(lines)
-        except (NoTranscriptFound, TranscriptsDisabled):
-            # Try any available language as fallback
+            entries = YouTubeTranscriptApi.get_transcript(video_id, languages=["en", "en-US", "en-GB"])
+            result = "\n".join(_snippet_to_line(e) for e in entries)
+            logger.info(f"youtube-transcript-api success: {len(result)} chars")
+            return result
+        except (NoTranscriptFound, TranscriptsDisabled) as e:
+            logger.warning(f"No English transcript for {video_id}: {e}. Trying any language...")
             try:
-                transcript_data = YouTubeTranscriptApi.list_transcripts(video_id)
-                transcript = transcript_data.find_generated_transcript(
-                    [t.language_code for t in transcript_data]
-                )
-                fetched = transcript.fetch()
-                lines = []
-                for entry in fetched:
-                    seconds = int(entry["start"])
-                    mm = seconds // 60
-                    ss = seconds % 60
-                    lines.append(f"[{mm:02d}:{ss:02d}] {entry['text']}")
-                return "\n".join(lines)
+                transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+                available = [t.language_code for t in transcript_list]
+                logger.info(f"Available transcript languages: {available}")
+                transcript = transcript_list.find_transcript(available)
+                entries = transcript.fetch()
+                result = "\n".join(_snippet_to_line(e) for e in entries)
+                logger.info(f"Fallback transcript success ({transcript.language}): {len(result)} chars")
+                return result
             except Exception as inner_e:
-                logger.warning(f"No transcript available for {video_id}: {inner_e}")
+                logger.error(f"All transcript attempts failed for {video_id}: {inner_e}")
                 return ""
         except Exception as e:
-            logger.warning(f"youtube-transcript-api failed for {video_id}: {e}")
+            logger.error(f"youtube-transcript-api error for {video_id}: {type(e).__name__}: {e}")
             return ""
+
+    def fetch_subtitles_via_ytdlp(self, url: str) -> str:
+        '''
+        Downloads subtitle/caption files only via yt-dlp (skip_download=True).
+        No video data is transferred. Falls back to auto-generated captions.
+        Returns a timestamped transcript string, or empty string if unavailable.
+        '''
+        import tempfile
+        import glob as _glob
+        import re as _re
+
+        def _parse_vtt(vtt_path: str) -> str:
+            lines = []
+            with open(vtt_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            for block in _re.split(r'\n\n+', content):
+                block = block.strip()
+                if not block or block.startswith('WEBVTT') or block.startswith('Kind:') or block.startswith('Language:'):
+                    continue
+                block_lines = block.split('\n')
+                ts_line = next((l for l in block_lines if '-->' in l), None)
+                if not ts_line:
+                    continue
+                start = ts_line.split('-->')[0].strip()
+                parts = start.replace('.', ':').split(':')
+                mm_ss = f"{parts[1]}:{parts[2]}" if len(parts) >= 3 else "00:00"
+                text_parts = [
+                    _re.sub(r'<[^>]+>', '', l).strip()
+                    for l in block_lines if '-->' not in l and not l.strip().isdigit() and l.strip()
+                ]
+                text = ' '.join(text_parts).strip()
+                if text:
+                    lines.append(f"[{mm_ss}] {text}")
+            return "\n".join(lines)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ydl_opts = {
+                'skip_download': True,
+                'writesubtitles': True,
+                'writeautomaticsub': True,
+                'subtitleslangs': ['en', 'en-US', 'en-GB'],
+                'subtitlesformat': 'vtt',
+                'outtmpl': os.path.join(tmpdir, '%(id)s.%(ext)s'),
+                'quiet': True,
+                'extractor_args': {'youtube': {'player_client': ['ios', 'mweb']}},
+            }
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    ydl.download([url])
+                vtt_files = _glob.glob(os.path.join(tmpdir, '*.vtt'))
+                if not vtt_files:
+                    logger.warning("yt-dlp subtitle download: no VTT files found")
+                    return ""
+                result = _parse_vtt(vtt_files[0])
+                logger.info(f"yt-dlp subtitle download success: {len(result)} chars")
+                return result
+            except Exception as e:
+                logger.error(f"yt-dlp subtitle download failed: {type(e).__name__}: {e}")
+                return ""
 
     def upload_video_by_url(self, video_url: str, video_name: str) -> str:
         '''
