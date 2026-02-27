@@ -162,22 +162,27 @@ def debug_transcript(url: str):
             "detail": str(e)
         }
 
-    # Test 3: yt-dlp audio download (can Render download from YouTube?)
+    # Test 3: yt-dlp audio download with cookies (requires YOUTUBE_COOKIES env var)
+    cookies_set = bool(os.getenv("YOUTUBE_COOKIES", ""))
     try:
         with tempfile.TemporaryDirectory() as tmpdir:
+            svc3 = VideoIndexerService()
+            cookie_opts = svc3._get_ytdlp_cookie_opts(tmpdir)
             out_path = os.path.join(tmpdir, "test_audio.%(ext)s")
             ydl_opts = {
                 'format': 'bestaudio[filesize<10M]/worstaudio',
                 'outtmpl': out_path,
                 'quiet': True,
-                'extractor_args': {'youtube': {'player_client': ['ios', 'mweb', 'web']}},
+                'extractor_args': {'youtube': {'player_client': ['ios', 'web']}},
+                **cookie_opts,
             }
             with _yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=True)
-            files = os.listdir(tmpdir)
+            files = [f for f in os.listdir(tmpdir) if not f.endswith('.txt')]
             total_size = sum(os.path.getsize(os.path.join(tmpdir, f)) for f in files)
             results["ytdlp_audio_download"] = {
                 "status": "ok",
+                "cookies_used": cookies_set,
                 "files": files,
                 "total_bytes": total_size,
                 "title": info.get("title") if info else None
@@ -185,6 +190,7 @@ def debug_transcript(url: str):
     except Exception as e:
         results["ytdlp_audio_download"] = {
             "status": "error",
+            "cookies_used": cookies_set,
             "error": type(e).__name__,
             "detail": str(e)
         }
