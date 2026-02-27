@@ -121,11 +121,11 @@ def health_check():
 def debug_transcript(url: str):
     '''
     GET /debug/transcript?url=<youtube_url>
-
-    Runs just the transcript extraction step and returns the result + any errors.
-    Use this to diagnose why transcript extraction fails on the deployed server.
+    Diagnoses transcript extraction and Azure VI credentials on the deployed server.
     '''
-    import traceback
+    import os
+    import tempfile
+    import yt_dlp as _yt_dlp
     from backend.src.services.video_indexer import VideoIndexerService
 
     results = {}
@@ -143,8 +143,7 @@ def debug_transcript(url: str):
         results["youtube_transcript_api"] = {
             "status": "error",
             "error": type(e).__name__,
-            "detail": str(e),
-            "traceback": traceback.format_exc()
+            "detail": str(e)
         }
 
     # Test 2: yt-dlp subtitle-only
@@ -160,8 +159,51 @@ def debug_transcript(url: str):
         results["ytdlp_subtitles"] = {
             "status": "error",
             "error": type(e).__name__,
-            "detail": str(e),
-            "traceback": traceback.format_exc()
+            "detail": str(e)
+        }
+
+    # Test 3: yt-dlp audio download (can Render download from YouTube?)
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_path = os.path.join(tmpdir, "test_audio.%(ext)s")
+            ydl_opts = {
+                'format': 'bestaudio[filesize<10M]/worstaudio',
+                'outtmpl': out_path,
+                'quiet': True,
+                'extractor_args': {'youtube': {'player_client': ['ios', 'mweb', 'web']}},
+            }
+            with _yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+            files = os.listdir(tmpdir)
+            total_size = sum(os.path.getsize(os.path.join(tmpdir, f)) for f in files)
+            results["ytdlp_audio_download"] = {
+                "status": "ok",
+                "files": files,
+                "total_bytes": total_size,
+                "title": info.get("title") if info else None
+            }
+    except Exception as e:
+        results["ytdlp_audio_download"] = {
+            "status": "error",
+            "error": type(e).__name__,
+            "detail": str(e)
+        }
+
+    # Test 4: Azure Video Indexer credentials
+    try:
+        svc = VideoIndexerService()
+        token = svc.get_account_access_token()
+        results["azure_vi_credentials"] = {
+            "status": "ok",
+            "account_id": svc.account_id,
+            "location": svc.location,
+            "token_type": type(token).__name__
+        }
+    except Exception as e:
+        results["azure_vi_credentials"] = {
+            "status": "error",
+            "error": type(e).__name__,
+            "detail": str(e)
         }
 
     return results
