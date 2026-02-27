@@ -33,6 +33,77 @@ class VideoIndexerService:
             raise Exception(f"Failed to get VI access token: {response.text}")
         return response.json()
 
+    def fetch_youtube_transcript(self, url: str) -> str:
+        '''
+        Fetches the YouTube video transcript using youtube-transcript-api.
+        This works reliably on cloud servers (no video download required).
+        Returns a timestamped transcript string, or empty string if unavailable.
+        '''
+        from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound, TranscriptsDisabled
+        import re as _re
+
+        # Extract video ID from URL
+        match = _re.search(r"(?:v=|youtu\.be/)([A-Za-z0-9_-]{11})", url)
+        if not match:
+            logger.warning("Could not extract video ID from URL: %s", url)
+            return ""
+
+        video_id = match.group(1)
+        logger.info(f"Fetching transcript for YouTube video ID: {video_id}")
+
+        try:
+            transcript_list = YouTubeTranscriptApi.get_transcript(video_id, languages=["en", "en-US", "en-GB"])
+            lines = []
+            for entry in transcript_list:
+                seconds = int(entry["start"])
+                mm = seconds // 60
+                ss = seconds % 60
+                lines.append(f"[{mm:02d}:{ss:02d}] {entry['text']}")
+            return "\n".join(lines)
+        except (NoTranscriptFound, TranscriptsDisabled):
+            # Try any available language as fallback
+            try:
+                transcript_data = YouTubeTranscriptApi.list_transcripts(video_id)
+                transcript = transcript_data.find_generated_transcript(
+                    [t.language_code for t in transcript_data]
+                )
+                fetched = transcript.fetch()
+                lines = []
+                for entry in fetched:
+                    seconds = int(entry["start"])
+                    mm = seconds // 60
+                    ss = seconds % 60
+                    lines.append(f"[{mm:02d}:{ss:02d}] {entry['text']}")
+                return "\n".join(lines)
+            except Exception as inner_e:
+                logger.warning(f"No transcript available for {video_id}: {inner_e}")
+                return ""
+        except Exception as e:
+            logger.warning(f"youtube-transcript-api failed for {video_id}: {e}")
+            return ""
+
+    def upload_video_by_url(self, video_url: str, video_name: str) -> str:
+        '''
+        Uploads a video to Azure Video Indexer by URL (no download required).
+        Azure VI fetches the video directly from the URL.
+        Returns the Azure video ID.
+        '''
+        vi_token = self.get_account_access_token()
+        api_url = f"{self.api_base}/{self.location}/Accounts/{self.account_id}/Videos"
+        params = {
+            "accessToken": vi_token,
+            "name": video_name,
+            "privacy": "Private",
+            "indexingPreset": "Default",
+            "videoUrl": video_url,
+        }
+        headers = {"Ocp-Apim-Subscription-Key": self.api_key}
+        logger.info(f"Uploading video by URL to Azure Video Indexer: {video_url}")
+        response = requests.post(api_url, params=params, headers=headers)
+        if response.status_code != 200:
+            raise Exception(f"Failed to upload video by URL: {response.text}")
+        return response.json().get("id")
+
     #function to download youtube video using yt-dlp
     def download_youtube_video(self, url, output_path="temp_video.mp4"):
         '''downloads the youtube video to a local file'''
