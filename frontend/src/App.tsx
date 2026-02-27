@@ -17,6 +17,15 @@ const INITIAL_STEPS: PipelineStep[] = [
   { id: 6, label: 'Generating Audit Report', status: 'pending' },
 ];
 
+const FILE_UPLOAD_STEPS: PipelineStep[] = [
+  { id: 1, label: 'Receiving Video File', status: 'pending' },
+  { id: 2, label: 'Uploading to Azure Video Indexer', status: 'pending' },
+  { id: 3, label: 'Extracting Transcript & OCR', status: 'pending' },
+  { id: 4, label: 'Querying Compliance Knowledge Base', status: 'pending' },
+  { id: 5, label: 'Running GPT-4o Analysis', status: 'pending' },
+  { id: 6, label: 'Generating Audit Report', status: 'pending' },
+];
+
 // ── App state snapshot ────────────────────────────────────────────────────────
 interface AppStateSnapshot {
   appState: AppState;
@@ -156,6 +165,79 @@ export default function App() {
     [advanceStep]
   );
 
+  const handleFileSubmit = useCallback(
+    async (file: File) => {
+      currentStepRef.current = 0;
+      abortControllerRef.current = new AbortController();
+
+      setState({
+        ...INITIAL_STATE,
+        appState: 'PROCESSING',
+        startTime: Date.now(),
+        videoUrl: file.name,
+        processingSteps: FILE_UPLOAD_STEPS.map((s, i) => ({
+          ...s,
+          status: i === 0 ? 'active' : 'pending',
+        })),
+      });
+
+      if (stepTimerRef.current) clearInterval(stepTimerRef.current);
+      stepTimerRef.current = setInterval(advanceStep, 15_000);
+
+      try {
+        const apiBase = import.meta.env.VITE_API_URL || '/api';
+        const formData = new FormData();
+        formData.append('file', file);
+
+        const response = await axios.post<AuditResponse>(
+          `${apiBase}/audit-file`,
+          formData,
+          {
+            timeout: 720_000,
+            signal: abortControllerRef.current.signal,
+            headers: { 'Content-Type': 'multipart/form-data' },
+          }
+        );
+
+        if (stepTimerRef.current) clearInterval(stepTimerRef.current);
+        setState((prev) => ({
+          ...prev,
+          appState: 'RESULTS',
+          result: response.data,
+          processingSteps: prev.processingSteps.map((s) => ({ ...s, status: 'done' })),
+        }));
+      } catch (err) {
+        if (stepTimerRef.current) clearInterval(stepTimerRef.current);
+        if (axios.isCancel(err)) return;
+
+        let message = 'The audit pipeline encountered an unexpected error. Please try again.';
+
+        if (err instanceof AxiosError) {
+          if (err.code === 'ECONNABORTED' || err.code === 'ERR_NETWORK') {
+            message =
+              'The request timed out. The backend pipeline may still be running — ' +
+              'please wait a moment and try again.';
+          } else if (err.response?.status === 500) {
+            const detail = (err.response.data as { detail?: string })?.detail;
+            message = detail
+              ? `Pipeline error: ${detail}`
+              : 'The audit pipeline failed on the server. Please check the backend logs.';
+          } else if (!err.response) {
+            message =
+              'Unable to connect to the backend. Please ensure the FastAPI server is running.';
+          }
+        }
+
+        setState((prev) => ({
+          ...prev,
+          appState: 'ERROR',
+          errorMessage: message,
+        }));
+      }
+    },
+    [advanceStep]
+  );
+
   const handleReset = useCallback(() => {
     if (stepTimerRef.current) clearInterval(stepTimerRef.current);
     abortControllerRef.current?.abort();
@@ -177,6 +259,7 @@ export default function App() {
           result={state.result}
           errorMessage={state.errorMessage}
           onSubmit={handleSubmit}
+          onFileSubmit={handleFileSubmit}
           onReset={handleReset}
           processingSteps={state.processingSteps}
           startTime={state.startTime}

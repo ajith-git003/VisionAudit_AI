@@ -5,14 +5,17 @@ This is a thin wrapper around the existing LangGraph workflow.
 Your frontend sends a video URL -> the pipeline runs -> results come back as JSON.
 '''
 
+import os
 import uuid
 import logging
+import tempfile
+import shutil
 from typing import List, Optional
 
 from dotenv import load_dotenv
 load_dotenv(override=True)
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -108,123 +111,63 @@ def run_audit(request: AuditRequest):
         logger.error(f"[API] Audit failed for {video_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Audit pipeline failed: {str(e)}")
 
+# --- File Upload Endpoint ---
+
+@app.post("/audit-file", response_model=AuditResponse)
+async def run_audit_file(file: UploadFile = File(...)):
+    '''
+    POST /audit-file
+
+    Accepts a video file upload (mp4, mov, avi, etc.), uploads it directly to
+    Azure Video Indexer, and returns the compliance audit results.
+
+    Use this when YouTube download is not available — download the video yourself
+    (e.g. using a tool like vidssave.com/yt) and upload it here.
+    '''
+    session_id = str(uuid.uuid4())
+    video_id = f"vid_{session_id[:8]}"
+
+    logger.info(f"[API] New file upload audit: {file.filename} (session: {session_id})")
+
+    # Save the uploaded file to a temp location on disk
+    suffix = os.path.splitext(file.filename or "video.mp4")[1] or ".mp4"
+    tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    try:
+        shutil.copyfileobj(file.file, tmp_file)
+        tmp_file.close()
+        tmp_path = tmp_file.name
+
+        initial_state = {
+            "video_url": "",
+            "video_id": video_id,
+            "local_file_path": tmp_path,
+            "compliance_results": [],
+            "errors": []
+        }
+
+        final_state = workflow_app.invoke(initial_state)
+
+        logger.info(f"[API] File audit complete for {video_id}: {final_state.get('final_status')}")
+
+        return AuditResponse(
+            video_id=final_state.get("video_id", video_id),
+            status=final_state.get("final_status", "FAIL"),
+            compliance_results=final_state.get("compliance_results", []),
+            report=final_state.get("final_report", "No report generated.")
+        )
+
+    except Exception as e:
+        logger.error(f"[API] File audit failed for {video_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Audit pipeline failed: {str(e)}")
+
+    finally:
+        # Always clean up the temp file
+        if os.path.exists(tmp_file.name):
+            os.remove(tmp_file.name)
+
 # --- Health Check ---
 
 @app.get("/health")
 def health_check():
     '''Simple health check endpoint to verify the server is running.'''
     return {"status": "ok", "service": "VisionAudit AI"}
-
-# --- Debug Endpoint ---
-
-@app.get("/debug/transcript")
-def debug_transcript(url: str):
-    '''
-    GET /debug/transcript?url=<youtube_url>
-    Diagnoses transcript extraction and Azure VI credentials on the deployed server.
-    '''
-    import os
-    import tempfile
-    import yt_dlp as _yt_dlp
-    from backend.src.services.video_indexer import VideoIndexerService
-
-    results = {}
-
-    # Test 1: youtube-transcript-api
-    try:
-        svc = VideoIndexerService()
-        transcript = svc.fetch_youtube_transcript(url)
-        results["youtube_transcript_api"] = {
-            "status": "ok" if transcript else "empty",
-            "chars": len(transcript),
-            "preview": transcript[:300] if transcript else None
-        }
-    except Exception as e:
-        results["youtube_transcript_api"] = {
-            "status": "error",
-            "error": type(e).__name__,
-            "detail": str(e)
-        }
-
-    # Test 2: yt-dlp subtitle-only
-    try:
-        svc = VideoIndexerService()
-        transcript2 = svc.fetch_subtitles_via_ytdlp(url)
-        results["ytdlp_subtitles"] = {
-            "status": "ok" if transcript2 else "empty",
-            "chars": len(transcript2),
-            "preview": transcript2[:300] if transcript2 else None
-        }
-    except Exception as e:
-        results["ytdlp_subtitles"] = {
-            "status": "error",
-            "error": type(e).__name__,
-            "detail": str(e)
-        }
-
-    # Test 3: yt-dlp audio download with cookies (requires YOUTUBE_COOKIES env var)
-    cookies_set = bool(os.getenv("YOUTUBE_COOKIES", ""))
-    try:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            svc3 = VideoIndexerService()
-            cookie_opts = svc3._get_ytdlp_cookie_opts(tmpdir)
-            out_path = os.path.join(tmpdir, "test_audio.%(ext)s")
-            ydl_opts = {
-                'format': 'bestaudio[filesize<10M]/worstaudio',
-                'outtmpl': out_path,
-                'quiet': True,
-                'extractor_args': {'youtube': {'player_client': ['ios', 'web']}},
-                **cookie_opts,
-            }
-            with _yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-            files = [f for f in os.listdir(tmpdir) if not f.endswith('.txt')]
-            total_size = sum(os.path.getsize(os.path.join(tmpdir, f)) for f in files)
-            results["ytdlp_audio_download"] = {
-                "status": "ok",
-                "cookies_used": cookies_set,
-                "files": files,
-                "total_bytes": total_size,
-                "title": info.get("title") if info else None
-            }
-    except Exception as e:
-        results["ytdlp_audio_download"] = {
-            "status": "error",
-            "cookies_used": cookies_set,
-            "error": type(e).__name__,
-            "detail": str(e)
-        }
-
-    # Test 4: Piped proxy stream URL
-    try:
-        svc4 = VideoIndexerService()
-        stream_url = svc4.get_stream_url_via_piped(url)
-        results["piped_stream_url"] = {
-            "status": "ok",
-            "url_preview": stream_url[:120] + "..."
-        }
-    except Exception as e:
-        results["piped_stream_url"] = {
-            "status": "error",
-            "error": type(e).__name__,
-            "detail": str(e)
-        }
-
-    # Test 5: Azure Video Indexer credentials
-    try:
-        svc = VideoIndexerService()
-        token = svc.get_account_access_token()
-        results["azure_vi_credentials"] = {
-            "status": "ok",
-            "account_id": svc.account_id,
-            "location": svc.location,
-            "token_type": type(token).__name__
-        }
-    except Exception as e:
-        results["azure_vi_credentials"] = {
-            "status": "error",
-            "error": type(e).__name__,
-            "detail": str(e)
-        }
-
-    return results

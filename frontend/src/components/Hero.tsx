@@ -10,6 +10,7 @@ interface HeroProps {
   result: AuditResponse | null;
   errorMessage: string | null;
   onSubmit: (url: string) => void;
+  onFileSubmit: (file: File) => void;
   onReset: () => void;
   processingSteps: PipelineStep[];
   startTime: number;
@@ -21,6 +22,7 @@ const Hero = ({
   result,
   errorMessage,
   onSubmit,
+  onFileSubmit,
   onReset,
   processingSteps,
   startTime,
@@ -120,7 +122,7 @@ const Hero = ({
       <div style={{ width: '100%', maxWidth: '760px' }}>
         <AnimatePresence mode="wait">
           {appState === 'IDLE' && (
-            <AuditCard key="idle" onSubmit={onSubmit} />
+            <AuditCard key="idle" onSubmit={onSubmit} onFileSubmit={onFileSubmit} />
           )}
 
           {appState === 'PROCESSING' && (

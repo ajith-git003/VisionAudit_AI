@@ -21,76 +21,59 @@ logging.basicConfig(level=logging.INFO)
 
 #NODE 1: Indexer
 #function responsible for converting video to text
-def index_video_node(state: VideoAuditState) -> Dict[str, Any]:
-    '''
-    Extracts transcript and OCR text from a YouTube video.
+def index_video_node(state: VideoAuditState)  -> Dict[str,Any]:
+    '''Downloads the youtube video from the URL (or uses an uploaded local file),
+    Uploads to the Azure video indexer,
+    extracts the insights'''
 
-    Strategy (avoids yt-dlp download failures on cloud server IPs):
-    1. Fetch transcript via youtube-transcript-api (no download needed, works on Render).
-    2. Send video URL directly to Azure Video Indexer for OCR extraction.
-       Falls back gracefully if Azure VI upload fails.
-    '''
-    video_url = state.get("video_url")
+    video_url = state.get("video_url", "")
+    video_id_input = state.get("video_id", "vid_demo")
+    local_file_path = state.get("local_file_path")  # set when user uploads a file directly
 
-    logger.info(f"----[Node:Indexer] Processing: {video_url}")
+    logger.info(f"----[Node:Indexer] Processing: {video_url or '(uploaded file)'}")
 
-    if not ("youtube.com" in video_url or "youtu.be" in video_url):
-        return {
-            "error": ["Please provide a valid YouTube URL."],
+    local_filename = "temp_audit_video.mp4"
+
+    try:
+        vi_service = VideoIndexerService()
+
+        if local_file_path:
+            # User uploaded a video file directly — skip the YouTube download step
+            logger.info(f"[Node:Indexer] Using uploaded file: {local_file_path}")
+            local_path = local_file_path
+            should_delete = False  # server.py cleans this up after the workflow
+
+        elif "youtube.com" in video_url or "youtu.be" in video_url:
+            # Download from YouTube via yt-dlp
+            local_path = vi_service.download_youtube_video(video_url, output_path=local_filename)
+            should_delete = True
+
+        else:
+            raise Exception("Please provide a valid YouTube URL or upload a video file.")
+
+        #upload to Azure Video Indexer
+        azure_video_id = vi_service.upload_video(local_path, video_name=video_id_input)
+        logger.info(f"Upload Success. Azure ID: {azure_video_id}")
+
+        #cleanup downloaded file (not uploaded files — server handles that)
+        if should_delete and os.path.exists(local_path):
+            os.remove(local_path)
+
+        raw_insights = vi_service.wait_for_processing(azure_video_id)
+        #extract
+        clean_data = vi_service.extract_data(raw_insights)
+        logger.info("---[NODE: Indexer] Extraction Complete ------")
+        return clean_data
+
+    except Exception as e:
+        logger.error(f"Video Indexer Failed : {e}")
+        return{
+            "error" : [str(e)],
             "final_status": "FAIL",
             "transcript": "",
             "ocr_text": []
+
         }
-
-    vi_service = VideoIndexerService()
-
-    # Step 1: youtube-transcript-api (for videos that have captions — no download needed)
-    transcript = vi_service.fetch_youtube_transcript(video_url)
-
-    # Step 2: yt-dlp subtitle-only (no video download, just VTT caption file)
-    if not transcript:
-        logger.info("[Node:Indexer] No captions found, trying yt-dlp subtitle download...")
-        transcript = vi_service.fetch_subtitles_via_ytdlp(video_url)
-
-    ocr_lines = []
-    video_metadata = {"platform": "youtube"}
-
-    # Step 3: Piped proxy → Azure Video Indexer
-    # Piped (open YouTube proxy) returns a direct CDN stream URL that Azure VI can download.
-    # This bypasses YouTube IP blocking entirely — no cookies needed.
-    if not transcript:
-        logger.info("[Node:Indexer] No subtitles, trying Piped proxy → Azure Video Indexer...")
-        video_id_name = state.get("video_id", "audit")
-        try:
-            stream_url = vi_service.get_stream_url_via_piped(video_url)
-            logger.info(f"[Node:Indexer] Got stream URL via Piped, uploading to Azure VI...")
-            azure_video_id = vi_service.upload_video_by_url(stream_url, video_name=video_id_name)
-            logger.info(f"[Node:Indexer] Azure VI upload success. ID: {azure_video_id}")
-            raw_insights = vi_service.wait_for_processing(azure_video_id)
-            clean_data = vi_service.extract_data(raw_insights)
-            transcript = clean_data.get("transcript", "")
-            ocr_lines = clean_data.get("ocr_text", [])
-            video_metadata = clean_data.get("video_metadata", video_metadata)
-            logger.info("---[Node:Indexer] Piped + Azure VI extraction complete ---")
-        except Exception as e:
-            logger.error(f"[Node:Indexer] Piped + Azure VI failed: {type(e).__name__}: {e}")
-
-    if not transcript and not ocr_lines:
-        logger.error("[Node:Indexer] No content extracted from any source.")
-        return {
-            "error": ["No transcript or on-screen text could be extracted. "
-                      "Set the YOUTUBE_COOKIES environment variable on the server to enable audio transcription for videos without captions."],
-            "final_status": "FAIL",
-            "transcript": "",
-            "ocr_text": []
-        }
-
-    logger.info("---[NODE: Indexer] Extraction Complete ------")
-    return {
-        "transcript": transcript,
-        "ocr_text": ocr_lines,
-        "video_metadata": video_metadata
-    }
 
 # NODE 2: Compliance Auditor
 def audit_content_node(state:VideoAuditState)  -> Dict[str,Any]:
