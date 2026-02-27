@@ -114,3 +114,54 @@ def run_audit(request: AuditRequest):
 def health_check():
     '''Simple health check endpoint to verify the server is running.'''
     return {"status": "ok", "service": "VisionAudit AI"}
+
+# --- Debug Endpoint ---
+
+@app.get("/debug/transcript")
+def debug_transcript(url: str):
+    '''
+    GET /debug/transcript?url=<youtube_url>
+
+    Runs just the transcript extraction step and returns the result + any errors.
+    Use this to diagnose why transcript extraction fails on the deployed server.
+    '''
+    import traceback
+    from backend.src.services.video_indexer import VideoIndexerService
+
+    results = {}
+
+    # Test 1: youtube-transcript-api
+    try:
+        svc = VideoIndexerService()
+        transcript = svc.fetch_youtube_transcript(url)
+        results["youtube_transcript_api"] = {
+            "status": "ok" if transcript else "empty",
+            "chars": len(transcript),
+            "preview": transcript[:300] if transcript else None
+        }
+    except Exception as e:
+        results["youtube_transcript_api"] = {
+            "status": "error",
+            "error": type(e).__name__,
+            "detail": str(e),
+            "traceback": traceback.format_exc()
+        }
+
+    # Test 2: yt-dlp subtitle-only
+    try:
+        svc = VideoIndexerService()
+        transcript2 = svc.fetch_subtitles_via_ytdlp(url)
+        results["ytdlp_subtitles"] = {
+            "status": "ok" if transcript2 else "empty",
+            "chars": len(transcript2),
+            "preview": transcript2[:300] if transcript2 else None
+        }
+    except Exception as e:
+        results["ytdlp_subtitles"] = {
+            "status": "error",
+            "error": type(e).__name__,
+            "detail": str(e),
+            "traceback": traceback.format_exc()
+        }
+
+    return results
