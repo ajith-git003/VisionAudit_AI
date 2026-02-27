@@ -55,25 +55,25 @@ def index_video_node(state: VideoAuditState) -> Dict[str, Any]:
     ocr_lines = []
     video_metadata = {"platform": "youtube"}
 
-    # Step 3: Full audio download → Azure Video Indexer (handles videos with no captions at all)
-    # Requires YOUTUBE_COOKIES env var on the server to bypass YouTube bot detection.
+    # Step 3: Piped proxy → Azure Video Indexer
+    # Piped (open YouTube proxy) returns a direct CDN stream URL that Azure VI can download.
+    # This bypasses YouTube IP blocking entirely — no cookies needed.
     if not transcript:
-        logger.info("[Node:Indexer] No subtitles found, trying full download → Azure Video Indexer...")
-        local_filename = "temp_audit_video"
+        logger.info("[Node:Indexer] No subtitles, trying Piped proxy → Azure Video Indexer...")
+        video_id_name = state.get("video_id", "audit")
         try:
-            local_path = vi_service.download_youtube_video(video_url, output_path=local_filename)
-            azure_video_id = vi_service.upload_video(local_path, video_name=video_id_input if 'video_id_input' in dir() else "audit")
+            stream_url = vi_service.get_stream_url_via_piped(video_url)
+            logger.info(f"[Node:Indexer] Got stream URL via Piped, uploading to Azure VI...")
+            azure_video_id = vi_service.upload_video_by_url(stream_url, video_name=video_id_name)
             logger.info(f"[Node:Indexer] Azure VI upload success. ID: {azure_video_id}")
-            if os.path.exists(local_path):
-                os.remove(local_path)
             raw_insights = vi_service.wait_for_processing(azure_video_id)
             clean_data = vi_service.extract_data(raw_insights)
             transcript = clean_data.get("transcript", "")
             ocr_lines = clean_data.get("ocr_text", [])
             video_metadata = clean_data.get("video_metadata", video_metadata)
-            logger.info("---[Node:Indexer] Azure Video Indexer extraction complete ---")
+            logger.info("---[Node:Indexer] Piped + Azure VI extraction complete ---")
         except Exception as e:
-            logger.error(f"[Node:Indexer] Full download + Azure VI failed: {type(e).__name__}: {e}")
+            logger.error(f"[Node:Indexer] Piped + Azure VI failed: {type(e).__name__}: {e}")
 
     if not transcript and not ocr_lines:
         logger.error("[Node:Indexer] No content extracted from any source.")

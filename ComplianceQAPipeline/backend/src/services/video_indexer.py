@@ -87,6 +87,48 @@ class VideoIndexerService:
             logger.error(f"youtube-transcript-api error for {video_id}: {type(e).__name__}: {e}")
             return ""
 
+    def get_stream_url_via_piped(self, youtube_url: str) -> str:
+        '''
+        Gets a direct video stream URL via the Piped open YouTube proxy API.
+        Piped fetches the stream URL from YouTube on its own servers (not blocked),
+        and returns a direct googlevideo.com CDN URL that Azure VI can download.
+        No cookies, no bot detection issues.
+        '''
+        import re as _re
+
+        match = _re.search(r"(?:v=|youtu\.be/)([A-Za-z0-9_-]{11})", youtube_url)
+        if not match:
+            raise Exception("Invalid YouTube URL — cannot extract video ID")
+        video_id = match.group(1)
+
+        piped_instances = [
+            "https://pipedapi.kavin.rocks",
+            "https://piped-api.garudalinux.org",
+            "https://api.piped.yt",
+            "https://pipedapi.adminforge.de",
+        ]
+
+        for instance in piped_instances:
+            try:
+                resp = requests.get(f"{instance}/streams/{video_id}", timeout=15)
+                if resp.status_code != 200:
+                    logger.warning(f"Piped {instance} returned {resp.status_code}")
+                    continue
+                data = resp.json()
+                # Prefer video streams (has both audio+video for Azure VI OCR+transcript)
+                # Fall back to audio-only if no video streams
+                all_streams = data.get("videoStreams", []) + data.get("audioStreams", [])
+                for stream in all_streams:
+                    url = stream.get("url", "")
+                    if url and "googlevideo.com" in url:
+                        logger.info(f"Got stream URL from Piped ({instance}): {url[:80]}...")
+                        return url
+            except Exception as e:
+                logger.warning(f"Piped instance {instance} failed: {type(e).__name__}: {e}")
+                continue
+
+        raise Exception("All Piped instances failed — cannot get stream URL for this video")
+
     def _get_ytdlp_cookie_opts(self, tmpdir: str) -> dict:
         '''
         If YOUTUBE_COOKIES env var is set (Netscape cookie file contents),
