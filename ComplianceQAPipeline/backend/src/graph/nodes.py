@@ -44,8 +44,12 @@ def index_video_node(state: VideoAuditState)  -> Dict[str,Any]:
             should_delete = False  # server.py cleans this up after the workflow
 
         elif "youtube.com" in video_url or "youtu.be" in video_url:
-            # Download from YouTube via yt-dlp
-            local_path = vi_service.download_youtube_video(video_url, output_path=local_filename)
+            # Try cobalt.tools first (works on cloud servers, bypasses YouTube IP blocking)
+            try:
+                local_path = vi_service.download_via_cobalt(video_url, output_path=local_filename)
+            except Exception as cobalt_err:
+                logger.warning(f"cobalt.tools failed ({cobalt_err}), falling back to yt-dlp...")
+                local_path = vi_service.download_youtube_video(video_url, output_path=local_filename)
             should_delete = True
 
         else:

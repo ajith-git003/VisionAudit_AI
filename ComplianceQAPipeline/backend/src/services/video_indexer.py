@@ -33,6 +33,42 @@ class VideoIndexerService:
             raise Exception(f"Failed to get VI access token: {response.text}")
         return response.json()
 
+    def download_via_cobalt(self, youtube_url: str, output_path: str = "temp_video.mp4") -> str:
+        '''
+        Downloads a YouTube video via cobalt.tools API.
+        cobalt.tools fetches the video on its own servers (not blocked by YouTube),
+        returns a direct download URL, and we stream-download it to a local file.
+        No API key required.
+        '''
+        logger.info(f"Trying cobalt.tools download for: {youtube_url}")
+        cobalt_api = "https://api.cobalt.tools/"
+        payload = {
+            "url": youtube_url,
+            "videoQuality": "360",
+            "filenameStyle": "basic",
+            "downloadMode": "auto"
+        }
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json"
+        }
+        resp = requests.post(cobalt_api, json=payload, headers=headers, timeout=30)
+        if resp.status_code != 200:
+            raise Exception(f"cobalt.tools API error {resp.status_code}: {resp.text[:200]}")
+        data = resp.json()
+        status = data.get("status")
+        download_url = data.get("url")
+        if status not in ("stream", "redirect", "tunnel") or not download_url:
+            raise Exception(f"cobalt.tools unexpected response: {data}")
+        # Stream-download the video file from cobalt's CDN URL
+        video_resp = requests.get(download_url, stream=True, timeout=300)
+        video_resp.raise_for_status()
+        with open(output_path, "wb") as f:
+            for chunk in video_resp.iter_content(chunk_size=8192):
+                f.write(chunk)
+        logger.info(f"cobalt.tools download complete: {output_path}")
+        return output_path
+
     #function to download youtube video using yt-dlp
     def download_youtube_video(self, url, output_path="temp_video.mp4"):
         '''downloads the youtube video to a local file'''
