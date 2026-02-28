@@ -33,14 +33,13 @@ class VideoIndexerService:
             raise Exception(f"Failed to get VI access token: {response.text}")
         return response.json()
 
-    def download_via_cobalt(self, youtube_url: str, output_path: str = "temp_video.mp4") -> str:
+    def get_cobalt_url(self, youtube_url: str) -> str:
         '''
-        Downloads a YouTube video via cobalt.tools API.
-        cobalt.tools fetches the video on its own servers (not blocked by YouTube),
-        returns a direct download URL, and we stream-download it to a local file.
-        No API key required.
+        Queries cobalt.tools and returns a direct video download URL.
+        Handles all response types: stream, redirect, tunnel, picker.
+        Does NOT download locally — returns the URL for Azure VI to fetch directly.
         '''
-        logger.info(f"Trying cobalt.tools download for: {youtube_url}")
+        logger.info(f"Querying cobalt.tools for direct URL: {youtube_url}")
         cobalt_api = "https://api.cobalt.tools/"
         payload = {
             "url": youtube_url,
@@ -57,10 +56,33 @@ class VideoIndexerService:
             raise Exception(f"cobalt.tools API error {resp.status_code}: {resp.text[:200]}")
         data = resp.json()
         status = data.get("status")
-        download_url = data.get("url")
-        if status not in ("stream", "redirect", "tunnel") or not download_url:
-            raise Exception(f"cobalt.tools unexpected response: {data}")
-        # Stream-download the video file from cobalt's CDN URL
+
+        # Direct URL statuses
+        if status in ("stream", "redirect", "tunnel"):
+            url = data.get("url")
+            if url:
+                logger.info(f"cobalt.tools returned {status} URL")
+                return url
+
+        # Picker: multiple quality options — take the first video option
+        if status == "picker":
+            for item in data.get("picker", []):
+                if item.get("type") == "video" and item.get("url"):
+                    logger.info("cobalt.tools picker: using first video option")
+                    return item["url"]
+            if data.get("audio"):
+                logger.info("cobalt.tools picker: using audio URL as fallback")
+                return data["audio"]
+
+        raise Exception(f"cobalt.tools unexpected response (status={status!r}): {data}")
+
+    def download_via_cobalt(self, youtube_url: str, output_path: str = "temp_video.mp4") -> str:
+        '''
+        Downloads a YouTube video via cobalt.tools to a local temp file.
+        Uses get_cobalt_url() internally (handles all response types including picker).
+        '''
+        download_url = self.get_cobalt_url(youtube_url)
+        logger.info("cobalt.tools: streaming download to local file...")
         video_resp = requests.get(download_url, stream=True, timeout=300)
         video_resp.raise_for_status()
         with open(output_path, "wb") as f:
@@ -119,6 +141,32 @@ class VideoIndexerService:
         if response.status_code != 200:
             raise Exception(f"Failed to upload video: {response.text}")
         return response.json().get("id")
+
+    def upload_video_by_url(self, video_url: str, video_name: str) -> str:
+        '''
+        Submits a video URL to Azure VI for server-side ingestion.
+        Azure VI's own servers fetch the video — no local download on Render needed.
+        '''
+        vi_token = self.get_account_access_token()
+        api_url = f"{self.api_base}/{self.location}/Accounts/{self.account_id}/Videos"
+        params = {
+            "accessToken": vi_token,
+            "name": video_name,
+            "privacy": "Private",
+            "indexingPreset": "Default",
+            "videoUrl": video_url,
+        }
+        headers = {
+            "Ocp-Apim-Subscription-Key": self.api_key
+        }
+        logger.info("Submitting video URL to Azure VI for server-side ingestion...")
+        response = requests.post(api_url, params=params, headers=headers)
+        if response.status_code != 200:
+            raise Exception(f"Azure VI URL ingestion failed ({response.status_code}): {response.text}")
+        video_id = response.json().get("id")
+        if not video_id:
+            raise Exception(f"Azure VI returned no video ID: {response.json()}")
+        return video_id
 
     def wait_for_processing(self, video_id):
         logger.info(f"Waiting for video {video_id} to process...")

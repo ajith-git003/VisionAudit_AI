@@ -36,31 +36,46 @@ def index_video_node(state: VideoAuditState)  -> Dict[str,Any]:
 
     try:
         vi_service = VideoIndexerService()
+        azure_video_id = None
+        local_path = None
+        should_delete = False
 
         if local_file_path:
-            # User uploaded a video file directly — skip the YouTube download step
+            # User uploaded a video file directly — use file upload path
             logger.info(f"[Node:Indexer] Using uploaded file: {local_file_path}")
             local_path = local_file_path
-            should_delete = False  # server.py cleans this up after the workflow
 
         elif "youtube.com" in video_url or "youtu.be" in video_url:
-            # Try cobalt.tools first (works on cloud servers, bypasses YouTube IP blocking)
+            # Strategy 1: cobalt URL → Azure VI server-side ingestion
+            # Azure VI's own servers fetch the video — Render never downloads it,
+            # so YouTube's datacenter IP block is bypassed entirely.
             try:
-                local_path = vi_service.download_via_cobalt(video_url, output_path=local_filename)
-            except Exception as cobalt_err:
-                logger.warning(f"cobalt.tools failed ({cobalt_err}), falling back to yt-dlp...")
-                local_path = vi_service.download_youtube_video(video_url, output_path=local_filename)
-            should_delete = True
+                cdn_url = vi_service.get_cobalt_url(video_url)
+                logger.info("Got cobalt CDN URL — submitting to Azure VI for server-side ingestion...")
+                azure_video_id = vi_service.upload_video_by_url(cdn_url, video_name=video_id_input)
+                logger.info(f"Azure VI URL ingestion success. ID: {azure_video_id}")
+            except Exception as url_err:
+                logger.warning(f"URL ingestion failed ({url_err}), falling back to local download...")
+
+            if azure_video_id is None:
+                # Strategy 2: local download → file upload (fallback)
+                try:
+                    local_path = vi_service.download_via_cobalt(video_url, output_path=local_filename)
+                except Exception as cobalt_err:
+                    logger.warning(f"cobalt download failed ({cobalt_err}), trying yt-dlp...")
+                    local_path = vi_service.download_youtube_video(video_url, output_path=local_filename)
+                should_delete = True
 
         else:
             raise Exception("Please provide a valid YouTube URL or upload a video file.")
 
-        #upload to Azure Video Indexer
-        azure_video_id = vi_service.upload_video(local_path, video_name=video_id_input)
-        logger.info(f"Upload Success. Azure ID: {azure_video_id}")
+        # File upload — only if not already ingested via URL
+        if azure_video_id is None:
+            azure_video_id = vi_service.upload_video(local_path, video_name=video_id_input)
+            logger.info(f"Upload Success. Azure ID: {azure_video_id}")
 
-        #cleanup downloaded file (not uploaded files — server handles that)
-        if should_delete and os.path.exists(local_path):
+        # Cleanup downloaded temp file (not user-uploaded files — server.py handles those)
+        if should_delete and local_path and os.path.exists(local_path):
             os.remove(local_path)
 
         raw_insights = vi_service.wait_for_processing(azure_video_id)
@@ -76,7 +91,6 @@ def index_video_node(state: VideoAuditState)  -> Dict[str,Any]:
             "final_status": "FAIL",
             "transcript": "",
             "ocr_text": []
-
         }
 
 # NODE 2: Compliance Auditor
