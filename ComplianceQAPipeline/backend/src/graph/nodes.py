@@ -173,8 +173,15 @@ def audit_content_node(state:VideoAuditState)  -> Dict[str,Any]:
             HumanMessage(content=user_message)
         ])
         content = response.content
-        if "'''" in content:
-            content = re.search(r"'''(?:json)?(.?)'''", content, re.DOTALL).group(1)
+        # Strip markdown code fences: ```json ... ``` or '''json ... '''
+        if "```" in content:
+            match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", content)
+            if match:
+                content = match.group(1)
+        elif "'''" in content:
+            match = re.search(r"'''(?:json)?\s*([\s\S]*?)\s*'''", content)
+            if match:
+                content = match.group(1)
         audit_data = json.loads(content.strip())
         results = audit_data.get("compliance_results",[])
         
