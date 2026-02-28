@@ -22,60 +22,29 @@ logging.basicConfig(level=logging.INFO)
 #NODE 1: Indexer
 #function responsible for converting video to text
 def index_video_node(state: VideoAuditState)  -> Dict[str,Any]:
-    '''Downloads the youtube video from the URL (or uses an uploaded local file),
-    Uploads to the Azure video indexer,
+    '''Downloads the youtube video from the URL
+    Uploads to the Azure video indexer
     extracts the insights'''
 
-    video_url = state.get("video_url", "")
+    video_url = state.get("video_url")
     video_id_input = state.get("video_id", "vid_demo")
-    local_file_path = state.get("local_file_path")  # set when user uploads a file directly
 
-    logger.info(f"----[Node:Indexer] Processing: {video_url or '(uploaded file)'}")
+    logger.info(f"----[Node:Indexer] Processing: {video_url}")
 
     local_filename = "temp_audit_video.mp4"
 
     try:
         vi_service = VideoIndexerService()
-        azure_video_id = None
-        local_path = None
-        should_delete = False
-
-        if local_file_path:
-            # User uploaded a video file directly — use file upload path
-            logger.info(f"[Node:Indexer] Using uploaded file: {local_file_path}")
-            local_path = local_file_path
-
-        elif "youtube.com" in video_url or "youtu.be" in video_url:
-            # Strategy 1: cobalt URL → Azure VI server-side ingestion
-            # Azure VI's own servers fetch the video — Render never downloads it,
-            # so YouTube's datacenter IP block is bypassed entirely.
-            try:
-                cdn_url = vi_service.get_cobalt_url(video_url)
-                logger.info("Got cobalt CDN URL — submitting to Azure VI for server-side ingestion...")
-                azure_video_id = vi_service.upload_video_by_url(cdn_url, video_name=video_id_input)
-                logger.info(f"Azure VI URL ingestion success. ID: {azure_video_id}")
-            except Exception as url_err:
-                logger.warning(f"URL ingestion failed ({url_err}), falling back to local download...")
-
-            if azure_video_id is None:
-                # Strategy 2: local download → file upload (fallback)
-                try:
-                    local_path = vi_service.download_via_cobalt(video_url, output_path=local_filename)
-                except Exception as cobalt_err:
-                    logger.warning(f"cobalt download failed ({cobalt_err}), trying yt-dlp...")
-                    local_path = vi_service.download_youtube_video(video_url, output_path=local_filename)
-                should_delete = True
-
+        #download
+        if "youtube.com" in video_url or "youtu.be" in video_url:
+            local_path = vi_service.download_youtube_video(video_url, output_path=local_filename)
         else:
-            raise Exception("Please provide a valid YouTube URL or upload a video file.")
-
-        # File upload — only if not already ingested via URL
-        if azure_video_id is None:
-            azure_video_id = vi_service.upload_video(local_path, video_name=video_id_input)
-            logger.info(f"Upload Success. Azure ID: {azure_video_id}")
-
-        # Cleanup downloaded temp file (not user-uploaded files — server.py handles those)
-        if should_delete and local_path and os.path.exists(local_path):
+            raise Exception("please provide a valid Yotube URL for this test.")
+        #upload
+        azure_video_id = vi_service.upload_video(local_path, video_name= video_id_input)
+        logger.info(f"Upload Success. Azure ID: {azure_video_id}")
+        #cleanup
+        if os.path.exists(local_path):
             os.remove(local_path)
 
         raw_insights = vi_service.wait_for_processing(azure_video_id)
@@ -83,7 +52,6 @@ def index_video_node(state: VideoAuditState)  -> Dict[str,Any]:
         clean_data = vi_service.extract_data(raw_insights)
         logger.info("---[NODE: Indexer] Extraction Complete ------")
         return clean_data
-
     except Exception as e:
         logger.error(f"Video Indexer Failed : {e}")
         return{
@@ -91,6 +59,7 @@ def index_video_node(state: VideoAuditState)  -> Dict[str,Any]:
             "final_status": "FAIL",
             "transcript": "",
             "ocr_text": []
+
         }
 
 # NODE 2: Compliance Auditor
