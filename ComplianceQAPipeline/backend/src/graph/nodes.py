@@ -116,11 +116,14 @@ def audit_content_node(state:VideoAuditState)  -> Dict[str,Any]:
             1. Analyze the transcript and OCR text below carefully against EVERY rule provided in the "OFFICIAL GUIDELINES" section.
             2. Identifying Violations:
                - Only flag a violation if a SPECIFIC rule from the "OFFICIAL GUIDELINES" is clearly breached.
-               - COSMETIC VS CLINICAL: Differentiate between standard beauty marketing (puffery) and actual clinical claims. 
-                 - PERMISSIBLE LANGUAGE: Words like "radiance", "hydration", "glow", and "illuminates complexion" are standard cosmetic promises and should NOT be flagged as violations unless they specifically make a medical claim (e.g., "cures eczema").
-                 - CLINICAL CLAIMS: Only flag "Performance" or "Clinical" claims if they are specifically medical (e.g., treats a disease) or use measurable, unsubstantiated data (e.g., "75% of women agreed").
-               - MARKETING PUFFERY: Assume standard brand superlatives ("best", "amazing") are compliant for professional ads.
-               - DISCLOSURE EXCEPTION: Paid advertisements are often labeled "Sponsored" by the platform. Do not flag lack of on-screen disclosure as a violation unless a specific rule explicitly requires extra on-screen text for the format.
+               - CONTEXT: This video is already approved and actively running as a paid YouTube advertisement. It has passed YouTube's ad review process. Apply a reasonable, industry-standard lens — not an overly strict academic one.
+               - COSMETIC VS CLINICAL: Differentiate between standard beauty marketing (puffery) and actual clinical claims.
+                 - PERMISSIBLE LANGUAGE: Words like "radiance", "hydration", "glow", "illuminates complexion", "powerful benefits", "nourishing", "strengthening", and multiplier claims like "2x", "3x", "7x" used for cosmetic effect (e.g., "7x more hydration feel") are standard beauty marketing and must NOT be flagged.
+                 - CLINICAL CLAIMS: Only flag if the ad explicitly claims to treat, cure, or prevent a medical condition (e.g., "cures eczema", "treats acne clinically") OR cites a specific unsubstantiated consumer survey as proof of a medical outcome (e.g., "87% of dermatologists agree it treats psoriasis").
+                 - "Market research" or "studies show" used in a general cosmetic context (e.g., "studies show it boosts shine") is standard beauty marketing — do NOT flag unless a specific rule explicitly forbids it.
+               - MARKETING PUFFERY: Assume standard brand superlatives ("best", "amazing", "powerful", "transformative") are compliant for professional ads.
+               - DISCLOSURE EXCEPTION: Paid advertisements are labeled "Sponsored" by YouTube. Do not flag lack of on-screen disclosure as a violation unless a specific rule explicitly requires extra on-screen text for this exact format.
+               - When in doubt, do NOT flag. Only flag violations you are highly confident about.
                - Provide a "timestamp" (MM:SS) where the violation occurs.
             3. Classification:
                - Categorize each violation based on the rule it breaks (e.g., "Disclosure", "Performance Claims", "Product Prominence").
