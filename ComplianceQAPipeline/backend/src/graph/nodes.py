@@ -32,19 +32,25 @@ def index_video_node(state: VideoAuditState)  -> Dict[str,Any]:
     logger.info(f"----[Node:Indexer] Processing: {video_url}")
 
     local_filename = "temp_audit_video.mp4"
+    local_file_path = state.get("local_file_path")
 
     try:
         vi_service = VideoIndexerService()
-        #download
-        if "youtube.com" in video_url or "youtu.be" in video_url:
+        #download or use provided local file
+        if local_file_path and os.path.exists(local_file_path):
+            logger.info(f"Using pre-uploaded local file: {local_file_path}")
+            local_path = local_file_path
+            should_cleanup = False  # don't delete — server.py cleans it up
+        elif "youtube.com" in (video_url or "") or "youtu.be" in (video_url or ""):
             local_path = vi_service.download_youtube_video(video_url, output_path=local_filename)
+            should_cleanup = True
         else:
-            raise Exception("please provide a valid Yotube URL for this test.")
+            raise Exception("Provide a valid YouTube URL or upload a video file.")
         #upload
         azure_video_id = vi_service.upload_video(local_path, video_name= video_id_input)
         logger.info(f"Upload Success. Azure ID: {azure_video_id}")
-        #cleanup
-        if os.path.exists(local_path):
+        #cleanup downloaded temp file (not user-uploaded files)
+        if should_cleanup and os.path.exists(local_path):
             os.remove(local_path)
 
         raw_insights = vi_service.wait_for_processing(azure_video_id)

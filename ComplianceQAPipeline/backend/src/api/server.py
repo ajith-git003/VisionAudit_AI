@@ -15,11 +15,14 @@ from typing import List, Optional
 from dotenv import load_dotenv
 load_dotenv(override=True)
 
+
+
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from backend.src.graph.workflow import app as workflow_app
+from backend.src.services.video_indexer import VideoIndexerService
 
 # --- Logging ---
 logging.basicConfig(
@@ -34,6 +37,17 @@ logger = logging.getLogger("api-server")
 class AuditRequest(BaseModel):
     '''What the frontend sends: just a YouTube URL.'''
     video_url: str
+
+class IndexVideoRequest(BaseModel):
+    '''Request body for the standalone index-video endpoint.'''
+    video_url: str
+
+class IndexVideoResponse(BaseModel):
+    '''Response from the standalone index-video endpoint.'''
+    azure_video_id: str
+    transcript: str
+    ocr_text: List[str]
+    duration_seconds: Optional[int] = None
 
 class ComplianceIssueResponse(BaseModel):
     '''A single compliance violation found by the auditor.'''
@@ -164,6 +178,67 @@ async def run_audit_file(file: UploadFile = File(...)):
         # Always clean up the temp file
         if os.path.exists(tmp_file.name):
             os.remove(tmp_file.name)
+
+# --- Standalone: Download YouTube → Upload to Azure Video Indexer ---
+
+@app.post("/index-video", response_model=IndexVideoResponse)
+def index_video_only(request: IndexVideoRequest):
+    '''
+    POST /index-video
+
+    Downloads a YouTube video and uploads it directly to Azure Video Indexer.
+    Returns the Azure VI video ID, transcript, and OCR text.
+
+    This is a standalone endpoint — it does NOT run the compliance audit.
+    Useful for pre-indexing videos or testing the Azure VI integration.
+    '''
+    if not request.video_url or (
+        "youtube.com" not in request.video_url and "youtu.be" not in request.video_url
+    ):
+        raise HTTPException(status_code=400, detail="Please provide a valid YouTube URL.")
+
+    session_id = str(uuid.uuid4())
+    video_name = f"index_{session_id[:8]}"
+    local_path = f"temp_{session_id[:8]}.mp4"
+
+    logger.info(f"[API] /index-video request: {request.video_url}")
+
+    vi_service = VideoIndexerService()
+
+    try:
+        # Step 1: Download from YouTube
+        logger.info(f"[API] Downloading: {request.video_url}")
+        vi_service.download_youtube_video(request.video_url, output_path=local_path)
+
+        # Step 2: Upload to Azure Video Indexer
+        logger.info(f"[API] Uploading to Azure Video Indexer as '{video_name}'")
+        azure_video_id = vi_service.upload_video(local_path, video_name=video_name)
+        logger.info(f"[API] Uploaded. Azure VI ID: {azure_video_id}")
+
+        # Step 3: Wait for Azure VI to finish processing
+        raw_insights = vi_service.wait_for_processing(azure_video_id)
+
+        # Step 4: Extract transcript + OCR
+        clean_data = vi_service.extract_data(raw_insights)
+
+        logger.info(f"[API] /index-video complete for Azure ID: {azure_video_id}")
+
+        return IndexVideoResponse(
+            azure_video_id=azure_video_id,
+            transcript=clean_data.get("transcript", ""),
+            ocr_text=clean_data.get("ocr_text", []),
+            duration_seconds=clean_data.get("video_metadata", {}).get("duration"),
+        )
+
+    except Exception as e:
+        logger.error(f"[API] /index-video failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Video indexing failed: {str(e)}")
+
+    finally:
+        if os.path.exists(local_path):
+            os.remove(local_path)
+            logger.info(f"[API] Cleaned up temp file: {local_path}")
+
 
 # --- Health Check ---
 

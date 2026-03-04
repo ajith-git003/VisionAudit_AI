@@ -1,0 +1,13 @@
+{
+  "name": "visionaudit-youtube-downloader",
+  "version": "1.0.0",
+  "description": "Fallback YouTube download service for VisionAudit AI. Used automatically when yt-dlp is blocked by YouTube IP detection.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@distube/ytdl-core": "^4.16.10",
+    "express": "^4.21.2"
+  }
+}

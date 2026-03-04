@@ -57,8 +57,10 @@ def run_cli_simulation():
     except Exception as e:
         logger.error(f"Workflow Execution Failed: {str(e)}")
         raise e
-    
+        #uv run uvicorn backend.src.api.server:app --reload --port 8000
+
 
 if __name__ == "__main__":
     run_cli_simulation()
     
+

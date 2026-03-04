@@ -10,12 +10,32 @@ import yt_dlp
 
 logger = logging.getLogger("video_indexer")
 
+# Error patterns that indicate YouTube is blocking the server's IP.
+# When any of these appear in a yt-dlp error, we switch to the
+# Node.js fallback downloader automatically.
+_IP_BLOCK_SIGNALS = (
+    "sign in to confirm",
+    "confirm you're not a bot",
+    "http error 429",
+    "too many requests",
+    "rate limit",
+    "http error 403",
+    "blocked",
+    "bot detection",
+    "nsig extraction failed",
+    "unable to extract",
+    "video unavailable",
+)
+
 class VideoIndexerService:
     def __init__(self):
         self.account_id = os.getenv("AZURE_VIDEO_INDEXER_ACCOUNT_ID")
         self.location = os.getenv("AZURE_VIDEO_INDEXER_LOCATION", "trial")
         self.api_key = os.getenv("AZURE_VI_API_KEY")
         self.api_base = "https://api.videoindexer.ai"
+        # Base URL of the Node.js YouTube downloader fallback server.
+        # Override with YT_DOWNLOADER_URL env var if running on a different port.
+        self.fallback_url = os.getenv("YT_DOWNLOADER_URL", "http://localhost:3000")
 
     def get_account_access_token(self):
         '''
@@ -33,10 +53,95 @@ class VideoIndexerService:
             raise Exception(f"Failed to get VI access token: {response.text}")
         return response.json()
 
+    def _is_ip_block_error(self, error_msg: str) -> bool:
+        '''Returns True if the error looks like an IP block or bot-detection rejection.'''
+        msg = error_msg.lower()
+        return any(signal in msg for signal in _IP_BLOCK_SIGNALS)
+
+    def _download_via_fallback_server(self, url: str, output_path: str) -> str:
+        '''
+        Fallback downloader: calls the local Node.js YouTube downloader server
+        (default http://localhost:3000) which uses @distube/ytdl-core — a different
+        download engine that bypasses the IP block that stopped yt-dlp.
+
+        Flow:
+          1. GET /api/info?url=...   → fetch available formats + best itag
+          2. GET /api/download?...   → stream the video bytes to output_path
+        '''
+        logger.info(f"[Fallback] Connecting to Node.js downloader at {self.fallback_url} ...")
+
+        # Step 1 — fetch video info and pick the best available format
+        try:
+            info_resp = requests.get(
+                f"{self.fallback_url}/api/info",
+                params={"url": url},
+                timeout=30
+            )
+        except requests.exceptions.ConnectionError:
+            raise Exception(
+                f"Fallback downloader is not reachable at {self.fallback_url}. "
+                "Make sure the Node.js YouTube downloader service is running: "
+                "cd 'VisionAudit AI/youtube-downloader' && npm install && npm start"
+            )
+
+        if info_resp.status_code != 200:
+            raise Exception(
+                f"Fallback /api/info returned {info_resp.status_code}: {info_resp.text}"
+            )
+
+        info = info_resp.json()
+        formats = info.get("formats", [])
+
+        if not formats:
+            raise Exception("Fallback server returned no downloadable formats for this video.")
+
+        # Formats are already sorted best-first by the Node.js server
+        best = formats[0]
+        itag = best["itag"]
+        title = info.get("title", "video")
+        logger.info(
+            f"[Fallback] Chosen format — itag: {itag}, "
+            f"quality: {best.get('quality')}, size: {best.get('size')}"
+        )
+
+        # Step 2 — stream the video to disk
+        logger.info(f"[Fallback] Streaming download to {output_path} ...")
+        try:
+            download_resp = requests.get(
+                f"{self.fallback_url}/api/download",
+                params={"url": url, "itag": itag, "title": title},
+                stream=True,
+                timeout=600  # 10-minute timeout for large videos
+            )
+        except requests.exceptions.ConnectionError:
+            raise Exception(
+                f"Lost connection to fallback downloader at {self.fallback_url} during download."
+            )
+
+        if download_resp.status_code != 200:
+            raise Exception(
+                f"Fallback /api/download returned {download_resp.status_code}: "
+                f"{download_resp.text[:200]}"
+            )
+
+        with open(output_path, "wb") as f:
+            for chunk in download_resp.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
+
+        logger.info(f"[Fallback] Download complete → {output_path}")
+        return output_path
+
     #function to download youtube video using yt-dlp
     def download_youtube_video(self, url, output_path="temp_video.mp4"):
-        '''downloads the youtube video to a local file'''
-        logger.info(f"Downloading video from {url}...")
+        '''
+        Downloads the YouTube video to a local file.
+
+        Primary:  yt-dlp (fast, supports all qualities)
+        Fallback: Node.js downloader server (@distube/ytdl-core) — used
+                  automatically when yt-dlp is blocked by YouTube's IP/bot detection.
+        '''
+        logger.info(f"[yt-dlp] Downloading video from {url} ...")
 
         ydl_opts = {
             'format': 'best',
@@ -51,10 +156,15 @@ class VideoIndexerService:
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([url])
-            logger.info("Video downloaded successfully")
+            logger.info("[yt-dlp] Download successful.")
             return output_path
         except Exception as e:
-            raise Exception(f"Failed to download video: {str(e)}")
+            error_msg = str(e)
+            if self._is_ip_block_error(error_msg):
+                logger.warning(f"[yt-dlp] IP/bot block detected: {error_msg}")
+                logger.info("[Fallback] Switching to Node.js downloader ...")
+                return self._download_via_fallback_server(url, output_path)
+            raise Exception(f"Failed to download video: {error_msg}")
 
     #Upload the video to Azure Video Indexer
     def upload_video(self, video_path, video_name):
