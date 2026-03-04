@@ -194,6 +194,34 @@ class VideoIndexerService:
             raise Exception(f"Failed to upload video: {response.text}")
         return response.json().get("id")
 
+    def upload_video_from_url(self, video_url, video_name):
+        '''
+        Submits a public video URL directly to Azure Video Indexer for ingestion.
+        Azure VI fetches the video from the URL on its own servers — no local download needed.
+        This bypasses IP blocks on hosted environments (Render, etc.).
+        '''
+        vi_token = self.get_account_access_token()
+
+        api_url = f"{self.api_base}/{self.location}/Accounts/{self.account_id}/Videos"
+
+        params = {
+            "accessToken": vi_token,
+            "name": video_name,
+            "privacy": "Private",
+            "indexingPreset": "Default",
+            "videoUrl": video_url,
+        }
+        headers = {
+            "Ocp-Apim-Subscription-Key": self.api_key
+        }
+
+        logger.info(f"Submitting URL to Azure Video Indexer: {video_url}")
+        response = requests.post(api_url, params=params, headers=headers)
+
+        if response.status_code != 200:
+            raise Exception(f"Failed to submit video URL to Azure VI: {response.text}")
+        return response.json().get("id")
+
     def wait_for_processing(self, video_id):
         logger.info(f"Waiting for video {video_id} to process...")
         while True:

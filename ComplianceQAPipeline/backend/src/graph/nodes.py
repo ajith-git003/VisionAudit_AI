@@ -31,27 +31,24 @@ def index_video_node(state: VideoAuditState)  -> Dict[str,Any]:
 
     logger.info(f"----[Node:Indexer] Processing: {video_url}")
 
-    local_filename = "temp_audit_video.mp4"
     local_file_path = state.get("local_file_path")
 
     try:
         vi_service = VideoIndexerService()
-        #download or use provided local file
+        is_youtube = "youtube.com" in (video_url or "") or "youtu.be" in (video_url or "")
+
         if local_file_path and os.path.exists(local_file_path):
+            # File upload path — upload the local file directly
             logger.info(f"Using pre-uploaded local file: {local_file_path}")
-            local_path = local_file_path
-            should_cleanup = False  # don't delete — server.py cleans it up
-        elif "youtube.com" in (video_url or "") or "youtu.be" in (video_url or ""):
-            local_path = vi_service.download_youtube_video(video_url, output_path=local_filename)
-            should_cleanup = True
+            azure_video_id = vi_service.upload_video(local_file_path, video_name=video_id_input)
+        elif is_youtube:
+            # YouTube URL path — submit the URL directly to Azure VI (no local download).
+            # Azure VI fetches it from their own servers, bypassing any IP blocks on this host.
+            logger.info(f"Submitting YouTube URL directly to Azure VI: {video_url}")
+            azure_video_id = vi_service.upload_video_from_url(video_url, video_name=video_id_input)
         else:
             raise Exception("Provide a valid YouTube URL or upload a video file.")
-        #upload
-        azure_video_id = vi_service.upload_video(local_path, video_name= video_id_input)
         logger.info(f"Upload Success. Azure ID: {azure_video_id}")
-        #cleanup downloaded temp file (not user-uploaded files)
-        if should_cleanup and os.path.exists(local_path):
-            os.remove(local_path)
 
         raw_insights = vi_service.wait_for_processing(azure_video_id)
         #extract
