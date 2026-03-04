@@ -35,7 +35,7 @@ class VideoIndexerService:
         self.api_base = "https://api.videoindexer.ai"
         # Base URL of the Node.js YouTube downloader fallback server.
         # Override with YT_DOWNLOADER_URL env var if running on a different port.
-        self.fallback_url = os.getenv("YT_DOWNLOADER_URL", "http://localhost:3000")
+        self.fallback_url = os.getenv("YT_DOWNLOADER_URL", "http://localhost:3001")
 
     def get_account_access_token(self):
         '''
