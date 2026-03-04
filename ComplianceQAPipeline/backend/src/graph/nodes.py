@@ -42,10 +42,12 @@ def index_video_node(state: VideoAuditState)  -> Dict[str,Any]:
             logger.info(f"Using pre-uploaded local file: {local_file_path}")
             azure_video_id = vi_service.upload_video(local_file_path, video_name=video_id_input)
         elif is_youtube:
-            # YouTube URL path — submit the URL directly to Azure VI (no local download).
-            # Azure VI fetches it from their own servers, bypassing any IP blocks on this host.
-            logger.info(f"Submitting YouTube URL directly to Azure VI: {video_url}")
-            azure_video_id = vi_service.upload_video_from_url(video_url, video_name=video_id_input)
+            # YouTube URL path — download first (yt-dlp, falls back to Node.js downloader
+            # if yt-dlp is IP-blocked), then upload the file to Azure VI.
+            local_path = vi_service.download_youtube_video(video_url, output_path="temp_audit_video.mp4")
+            azure_video_id = vi_service.upload_video(local_path, video_name=video_id_input)
+            if os.path.exists(local_path):
+                os.remove(local_path)
         else:
             raise Exception("Provide a valid YouTube URL or upload a video file.")
         logger.info(f"Upload Success. Azure ID: {azure_video_id}")

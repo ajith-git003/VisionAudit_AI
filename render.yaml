@@ -5,11 +5,13 @@ services:
     region: singapore
     plan: free
     rootDir: ComplianceQAPipeline
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn backend.src.api.server:app --host 0.0.0.0 --port $PORT
+    buildCommand: pip install -r requirements.txt && cd ../youtube-downloader && npm install --production
+    startCommand: bash start.sh
     envVars:
       - key: PYTHON_VERSION
         value: "3.13.0"
+      - key: YT_DOWNLOADER_URL
+        value: "http://localhost:3001"
       - key: AZURE_OPENAI_API_KEY
         sync: false
       - key: AZURE_SEARCH_API_KEY
