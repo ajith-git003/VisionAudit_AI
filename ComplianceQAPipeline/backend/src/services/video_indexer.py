@@ -7,6 +7,7 @@ import logging
 import time
 import requests
 import yt_dlp
+from pytubefix import YouTube
 
 logger = logging.getLogger("video_indexer")
 
@@ -33,9 +34,6 @@ class VideoIndexerService:
         self.location = os.getenv("AZURE_VIDEO_INDEXER_LOCATION", "trial")
         self.api_key = os.getenv("AZURE_VI_API_KEY")
         self.api_base = "https://api.videoindexer.ai"
-        # Base URL of the Node.js YouTube downloader fallback server.
-        # Override with YT_DOWNLOADER_URL env var if running on a different port.
-        self.fallback_url = os.getenv("YT_DOWNLOADER_URL", "http://localhost:3001")
 
     def get_account_access_token(self):
         '''
@@ -58,78 +56,37 @@ class VideoIndexerService:
         msg = error_msg.lower()
         return any(signal in msg for signal in _IP_BLOCK_SIGNALS)
 
-    def _download_via_fallback_server(self, url: str, output_path: str) -> str:
+    def _download_via_pytubefix(self, url: str, output_path: str) -> str:
         '''
-        Fallback downloader: calls the local Node.js YouTube downloader server
-        (default http://localhost:3000) which uses @distube/ytdl-core — a different
-        download engine that bypasses the IP block that stopped yt-dlp.
-
-        Flow:
-          1. GET /api/info?url=...   → fetch available formats + best itag
-          2. GET /api/download?...   → stream the video bytes to output_path
+        Fallback downloader using pytubefix (Python-native).
+        Uses a completely different YouTube extraction engine than yt-dlp,
+        so it can succeed even when yt-dlp is blocked.
         '''
-        logger.info(f"[Fallback] Connecting to Node.js downloader at {self.fallback_url} ...")
+        logger.info(f"[pytubefix] Attempting download: {url}")
 
-        # Step 1 — fetch video info and pick the best available format
-        try:
-            info_resp = requests.get(
-                f"{self.fallback_url}/api/info",
-                params={"url": url},
-                timeout=30
-            )
-        except requests.exceptions.ConnectionError:
-            raise Exception(
-                f"Fallback downloader is not reachable at {self.fallback_url}. "
-                "Make sure the Node.js YouTube downloader service is running: "
-                "cd 'VisionAudit AI/youtube-downloader' && npm install && npm start"
-            )
+        yt = YouTube(url)
+        stream = yt.streams.filter(
+            progressive=True, file_extension='mp4'
+        ).order_by('resolution').desc().first()
 
-        if info_resp.status_code != 200:
-            raise Exception(
-                f"Fallback /api/info returned {info_resp.status_code}: {info_resp.text}"
-            )
+        if not stream:
+            # Fall back to any available mp4 stream
+            stream = yt.streams.filter(file_extension='mp4').first()
 
-        info = info_resp.json()
-        formats = info.get("formats", [])
+        if not stream:
+            raise Exception("pytubefix found no downloadable MP4 streams for this video.")
 
-        if not formats:
-            raise Exception("Fallback server returned no downloadable formats for this video.")
-
-        # Formats are already sorted best-first by the Node.js server
-        best = formats[0]
-        itag = best["itag"]
-        title = info.get("title", "video")
         logger.info(
-            f"[Fallback] Chosen format — itag: {itag}, "
-            f"quality: {best.get('quality')}, size: {best.get('size')}"
+            f"[pytubefix] Downloading stream — resolution: {stream.resolution}, "
+            f"size: {stream.filesize_mb:.1f} MB"
         )
 
-        # Step 2 — stream the video to disk
-        logger.info(f"[Fallback] Streaming download to {output_path} ...")
-        try:
-            download_resp = requests.get(
-                f"{self.fallback_url}/api/download",
-                params={"url": url, "itag": itag, "title": title},
-                stream=True,
-                timeout=600  # 10-minute timeout for large videos
-            )
-        except requests.exceptions.ConnectionError:
-            raise Exception(
-                f"Lost connection to fallback downloader at {self.fallback_url} during download."
-            )
+        # Download to the directory containing output_path with the target filename
+        out_dir = os.path.dirname(os.path.abspath(output_path)) or "."
+        filename = os.path.basename(output_path)
+        stream.download(output_path=out_dir, filename=filename)
 
-        if download_resp.status_code != 200:
-            raise Exception(
-                f"Fallback /api/download returned {download_resp.status_code}: "
-                f"{download_resp.text[:200]}"
-            )
-
-        with open(output_path, "wb") as f:
-            for chunk in download_resp.iter_content(chunk_size=8192):
-                if chunk:
-                    f.write(chunk)
-
-        logger.info(f"[Fallback] Download complete → {output_path}")
+        logger.info(f"[pytubefix] Download complete → {output_path}")
         return output_path
 
     #function to download youtube video using yt-dlp
@@ -138,9 +95,8 @@ class VideoIndexerService:
         Downloads the YouTube video to a local file.
 
         Primary:  yt-dlp (fast, supports all qualities)
-        Fallback: Node.js downloader server (@distube/ytdl-core) — used
-                  automatically when yt-dlp fails (IP blocks, extraction errors,
-                  rate limits, etc.).
+        Fallback: pytubefix (Python-native) — uses a different extraction
+                  engine, triggered automatically when yt-dlp fails.
         '''
         logger.info(f"[yt-dlp] Downloading video from {url} ...")
 
@@ -166,14 +122,14 @@ class VideoIndexerService:
             else:
                 logger.warning(f"[yt-dlp] Download failed: {yt_dlp_error}")
 
-            logger.info("[Fallback] Switching to Node.js downloader ...")
+            logger.info("[Fallback] Switching to pytubefix ...")
             try:
-                return self._download_via_fallback_server(url, output_path)
+                return self._download_via_pytubefix(url, output_path)
             except Exception as fallback_error:
                 raise Exception(
                     f"Both download methods failed. "
                     f"yt-dlp: {yt_dlp_error} | "
-                    f"Node.js fallback: {str(fallback_error)}"
+                    f"pytubefix: {str(fallback_error)}"
                 )
 
     #Upload the video to Azure Video Indexer
