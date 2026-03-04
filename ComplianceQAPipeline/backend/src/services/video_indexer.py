@@ -3,7 +3,9 @@ Connector: Python and Azure Video Indexer
 '''
 
 import os
+import base64
 import logging
+import tempfile
 import time
 import requests
 import yt_dlp
@@ -34,6 +36,26 @@ class VideoIndexerService:
         self.location = os.getenv("AZURE_VIDEO_INDEXER_LOCATION", "trial")
         self.api_key = os.getenv("AZURE_VI_API_KEY")
         self.api_base = "https://api.videoindexer.ai"
+        # Decode YouTube cookies from base64 env var → temp file (for yt-dlp auth)
+        self._cookies_path = self._init_cookies()
+
+    @staticmethod
+    def _init_cookies():
+        '''Decodes YOUTUBE_COOKIES_B64 env var into a temp file for yt-dlp.'''
+        b64 = os.getenv("YOUTUBE_COOKIES_B64")
+        if not b64:
+            logger.info("No YOUTUBE_COOKIES_B64 set — yt-dlp will run without cookies.")
+            return None
+        try:
+            raw = base64.b64decode(b64)
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".txt", prefix="yt_cookies_")
+            tmp.write(raw)
+            tmp.close()
+            logger.info(f"YouTube cookies written to {tmp.name}")
+            return tmp.name
+        except Exception as e:
+            logger.warning(f"Failed to decode YOUTUBE_COOKIES_B64: {e}")
+            return None
 
     def get_account_access_token(self):
         '''
@@ -110,6 +132,11 @@ class VideoIndexerService:
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             }
         }
+        # Attach cookies if available — authenticates the request so YouTube
+        # won't block the download with "Sign in to confirm you're not a bot"
+        if self._cookies_path:
+            ydl_opts['cookiefile'] = self._cookies_path
+            logger.info("[yt-dlp] Using YouTube cookies for authentication.")
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([url])
