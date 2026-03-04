@@ -139,7 +139,8 @@ class VideoIndexerService:
 
         Primary:  yt-dlp (fast, supports all qualities)
         Fallback: Node.js downloader server (@distube/ytdl-core) — used
-                  automatically when yt-dlp is blocked by YouTube's IP/bot detection.
+                  automatically when yt-dlp fails (IP blocks, extraction errors,
+                  rate limits, etc.).
         '''
         logger.info(f"[yt-dlp] Downloading video from {url} ...")
 
@@ -159,12 +160,21 @@ class VideoIndexerService:
             logger.info("[yt-dlp] Download successful.")
             return output_path
         except Exception as e:
-            error_msg = str(e)
-            if self._is_ip_block_error(error_msg):
-                logger.warning(f"[yt-dlp] IP/bot block detected: {error_msg}")
-                logger.info("[Fallback] Switching to Node.js downloader ...")
+            yt_dlp_error = str(e)
+            if self._is_ip_block_error(yt_dlp_error):
+                logger.warning(f"[yt-dlp] IP/bot block detected: {yt_dlp_error}")
+            else:
+                logger.warning(f"[yt-dlp] Download failed: {yt_dlp_error}")
+
+            logger.info("[Fallback] Switching to Node.js downloader ...")
+            try:
                 return self._download_via_fallback_server(url, output_path)
-            raise Exception(f"Failed to download video: {error_msg}")
+            except Exception as fallback_error:
+                raise Exception(
+                    f"Both download methods failed. "
+                    f"yt-dlp: {yt_dlp_error} | "
+                    f"Node.js fallback: {str(fallback_error)}"
+                )
 
     #Upload the video to Azure Video Indexer
     def upload_video(self, video_path, video_name):

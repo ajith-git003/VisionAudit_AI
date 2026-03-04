@@ -60,7 +60,7 @@ def index_video_node(state: VideoAuditState)  -> Dict[str,Any]:
     except Exception as e:
         logger.error(f"Video Indexer Failed : {e}")
         return{
-            "error" : [str(e)],
+            "errors" : [str(e)],
             "final_status": "FAIL",
             "transcript": "",
             "ocr_text": []
@@ -72,10 +72,20 @@ def audit_content_node(state:VideoAuditState)  -> Dict[str,Any]:
     '''Performs Retrieval Augmented Generation to audit the content - brand video'''
 
     logger.info("----[Node: Auditor] querying Knowledge base & LLM")
+
+    # Surface indexer errors instead of hiding them behind a generic message
+    indexer_errors = state.get("errors", [])
     transcript = state.get("transcript") or ""
     ocr_text_early = state.get("ocr_text", [])
 
     if not transcript and not ocr_text_early:
+        if indexer_errors:
+            error_detail = "; ".join(indexer_errors)
+            logger.warning(f"No transcript/OCR — indexer reported errors: {error_detail}")
+            return {
+                "final_status": "FAIL",
+                "final_report": f"Video processing failed: {error_detail}"
+            }
         logger.warning("No transcript or OCR text available. Skipping audit...")
         return {
             "final_status": "FAIL",
