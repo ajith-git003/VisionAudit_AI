@@ -36,5 +36,7 @@ services:
         sync: false
       - key: AZURE_VIDEO_INDEXER_LOCATION
         sync: false
+      - key: APPLICATIONINSIGHTS_CONNECTION_STRING
+        sync: false
       - key: YOUTUBE_COOKIES_B64
         sync: false

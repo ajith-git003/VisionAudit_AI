@@ -23,6 +23,10 @@ from pydantic import BaseModel
 
 from backend.src.graph.workflow import app as workflow_app
 from backend.src.services.video_indexer import VideoIndexerService
+from backend.src.api.telemetry import setup_telemetry
+
+# --- Telemetry ---
+setup_telemetry()
 
 # --- Logging ---
 logging.basicConfig(
