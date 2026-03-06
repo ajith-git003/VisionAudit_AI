@@ -7,16 +7,6 @@ import Hero from './components/Hero';
 import HowItWorks from './components/HowItWorks';
 import Footer from './components/Footer';
 
-// ── Initial pipeline steps ────────────────────────────────────────────────────
-const INITIAL_STEPS: PipelineStep[] = [
-  { id: 1, label: 'Downloading Video from YouTube', status: 'pending' },
-  { id: 2, label: 'Uploading to Azure Video Indexer', status: 'pending' },
-  { id: 3, label: 'Extracting Transcript & OCR', status: 'pending' },
-  { id: 4, label: 'Querying Compliance Knowledge Base', status: 'pending' },
-  { id: 5, label: 'Running GPT-4o Analysis', status: 'pending' },
-  { id: 6, label: 'Generating Audit Report', status: 'pending' },
-];
-
 const FILE_UPLOAD_STEPS: PipelineStep[] = [
   { id: 1, label: 'Receiving Video File', status: 'pending' },
   { id: 2, label: 'Uploading to Azure Video Indexer', status: 'pending' },
@@ -26,7 +16,6 @@ const FILE_UPLOAD_STEPS: PipelineStep[] = [
   { id: 6, label: 'Generating Audit Report', status: 'pending' },
 ];
 
-// ── App state snapshot ────────────────────────────────────────────────────────
 interface AppStateSnapshot {
   appState: AppState;
   result: AuditResponse | null;
@@ -40,45 +29,39 @@ const INITIAL_STATE: AppStateSnapshot = {
   appState: 'IDLE',
   result: null,
   errorMessage: null,
-  processingSteps: INITIAL_STEPS,
+  processingSteps: FILE_UPLOAD_STEPS,
   startTime: 0,
   videoUrl: '',
 };
 
-// ── App Component ─────────────────────────────────────────────────────────────
 export default function App() {
   const [state, setState] = useState<AppStateSnapshot>(INITIAL_STATE);
   const stepTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const currentStepRef = useRef<number>(0);
-  const abortControllerRef = useRef<AbortController | null>(null);
 
-  // Cleanup on unmount
   useEffect(() => {
     return () => {
       if (stepTimerRef.current) clearInterval(stepTimerRef.current);
-      abortControllerRef.current?.abort();
+      if (pollTimerRef.current) clearInterval(pollTimerRef.current);
     };
   }, []);
 
-  // Advance one pipeline step every 15 seconds (cosmetic UX only)
   const advanceStep = useCallback(() => {
     currentStepRef.current += 1;
     const next = currentStepRef.current;
-
     setState((prev) => {
       if (prev.appState !== 'PROCESSING') return prev;
-
-      if (next >= INITIAL_STEPS.length) {
+      if (next >= FILE_UPLOAD_STEPS.length) {
         if (stepTimerRef.current) clearInterval(stepTimerRef.current);
         return {
           ...prev,
           processingSteps: prev.processingSteps.map((s, i) => ({
             ...s,
-            status: i < INITIAL_STEPS.length - 1 ? 'done' : 'active',
+            status: i < FILE_UPLOAD_STEPS.length - 1 ? 'done' : 'active',
           })),
         };
       }
-
       return {
         ...prev,
         processingSteps: prev.processingSteps.map((s, i) => {
@@ -90,85 +73,11 @@ export default function App() {
     });
   }, []);
 
-  const handleSubmit = useCallback(
-    async (url: string) => {
-      currentStepRef.current = 0;
-      abortControllerRef.current = new AbortController();
-
-      setState({
-        ...INITIAL_STATE,
-        appState: 'PROCESSING',
-        startTime: Date.now(),
-        videoUrl: url,
-        processingSteps: INITIAL_STEPS.map((s, i) => ({
-          ...s,
-          status: i === 0 ? 'active' : 'pending',
-        })),
-      });
-
-      if (stepTimerRef.current) clearInterval(stepTimerRef.current);
-      stepTimerRef.current = setInterval(advanceStep, 15_000);
-
-      try {
-        // 12-minute timeout — the pipeline can take up to 10 minutes
-        const apiBase = import.meta.env.VITE_API_URL || '/api';
-        const response = await axios.post<AuditResponse>(
-          `${apiBase}/audit`,
-          { video_url: url },
-          {
-            timeout: 720_000,
-            signal: abortControllerRef.current.signal,
-            headers: { 'Content-Type': 'application/json' },
-          }
-        );
-
-        if (stepTimerRef.current) clearInterval(stepTimerRef.current);
-        setState((prev) => ({
-          ...prev,
-          appState: 'RESULTS',
-          result: response.data,
-          processingSteps: prev.processingSteps.map((s) => ({ ...s, status: 'done' })),
-        }));
-      } catch (err) {
-        if (stepTimerRef.current) clearInterval(stepTimerRef.current);
-
-        // Ignore intentional abort from user reset
-        if (axios.isCancel(err)) return;
-
-        let message = 'The audit pipeline encountered an unexpected error. Please try again.';
-
-        if (err instanceof AxiosError) {
-          if (err.code === 'ECONNABORTED' || err.code === 'ERR_NETWORK') {
-            message =
-              'The request timed out. The backend pipeline may still be running — ' +
-              'please wait a moment and try again.';
-          } else if (err.response?.status === 500) {
-            const detail = (err.response.data as { detail?: string })?.detail;
-            message = detail
-              ? `Pipeline error: ${detail}`
-              : 'The audit pipeline failed on the server. Please check the backend logs.';
-          } else if (err.response?.status === 422) {
-            message = 'Invalid request. Please ensure you have entered a valid YouTube URL.';
-          } else if (!err.response) {
-            message =
-              'Unable to connect to the backend. Please ensure the FastAPI server is running at http://localhost:8000.';
-          }
-        }
-
-        setState((prev) => ({
-          ...prev,
-          appState: 'ERROR',
-          errorMessage: message,
-        }));
-      }
-    },
-    [advanceStep]
-  );
-
   const handleFileSubmit = useCallback(
     async (file: File) => {
       currentStepRef.current = 0;
-      abortControllerRef.current = new AbortController();
+      if (stepTimerRef.current) clearInterval(stepTimerRef.current);
+      if (pollTimerRef.current) clearInterval(pollTimerRef.current);
 
       setState({
         ...INITIAL_STATE,
@@ -181,78 +90,90 @@ export default function App() {
         })),
       });
 
-      if (stepTimerRef.current) clearInterval(stepTimerRef.current);
       stepTimerRef.current = setInterval(advanceStep, 15_000);
 
+      const apiBase = import.meta.env.VITE_API_URL || '/api';
+
       try {
-        const apiBase = import.meta.env.VITE_API_URL || '/api';
+        // Step 1: Submit file, get job_id back immediately
         const formData = new FormData();
         formData.append('file', file);
-
-        const response = await axios.post<AuditResponse>(
+        const submitRes = await axios.post<{ job_id: string; status: string }>(
           `${apiBase}/audit-file`,
           formData,
-          {
-            timeout: 720_000,
-            signal: abortControllerRef.current.signal,
-            headers: { 'Content-Type': 'multipart/form-data' },
-          }
+          { headers: { 'Content-Type': 'multipart/form-data' } }
         );
+        const { job_id } = submitRes.data;
 
-        if (stepTimerRef.current) clearInterval(stepTimerRef.current);
-        setState((prev) => ({
-          ...prev,
-          appState: 'RESULTS',
-          result: response.data,
-          processingSteps: prev.processingSteps.map((s) => ({ ...s, status: 'done' })),
-        }));
+        // Step 2: Poll /status/{job_id} every 10 seconds
+        pollTimerRef.current = setInterval(async () => {
+          try {
+            const pollRes = await axios.get<{
+              job_id: string;
+              status: string;
+              result?: AuditResponse;
+              error?: string;
+            }>(`${apiBase}/status/${job_id}`);
+
+            const { status, result, error } = pollRes.data;
+
+            if (status === 'complete' && result) {
+              if (stepTimerRef.current) clearInterval(stepTimerRef.current);
+              if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+              setState((prev) => ({
+                ...prev,
+                appState: 'RESULTS',
+                result,
+                processingSteps: prev.processingSteps.map((s) => ({ ...s, status: 'done' })),
+              }));
+            } else if (status === 'failed') {
+              if (stepTimerRef.current) clearInterval(stepTimerRef.current);
+              if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+              setState((prev) => ({
+                ...prev,
+                appState: 'ERROR',
+                errorMessage: error
+                  ? `Pipeline error: ${error}`
+                  : 'The audit pipeline failed on the server.',
+              }));
+            }
+          } catch {
+            // polling errors are transient — keep polling
+          }
+        }, 10_000);
+
       } catch (err) {
         if (stepTimerRef.current) clearInterval(stepTimerRef.current);
-        if (axios.isCancel(err)) return;
+        if (pollTimerRef.current) clearInterval(pollTimerRef.current);
 
         let message = 'The audit pipeline encountered an unexpected error. Please try again.';
-
         if (err instanceof AxiosError) {
-          if (err.code === 'ECONNABORTED' || err.code === 'ERR_NETWORK') {
-            message =
-              'The request timed out. The backend pipeline may still be running — ' +
-              'please wait a moment and try again.';
-          } else if (err.response?.status === 500) {
+          if (err.response?.status === 500) {
             const detail = (err.response.data as { detail?: string })?.detail;
-            message = detail
-              ? `Pipeline error: ${detail}`
-              : 'The audit pipeline failed on the server. Please check the backend logs.';
+            message = detail ? `Pipeline error: ${detail}` : message;
           } else if (!err.response) {
-            message =
-              'Unable to connect to the backend. Please ensure the FastAPI server is running.';
+            message = 'Unable to connect to the backend. Please ensure the FastAPI server is running.';
           }
         }
-
-        setState((prev) => ({
-          ...prev,
-          appState: 'ERROR',
-          errorMessage: message,
-        }));
+        setState((prev) => ({ ...prev, appState: 'ERROR', errorMessage: message }));
       }
     },
     [advanceStep]
   );
 
+  // kept for prop compatibility with Hero/AuditCard
+  const handleSubmit = useCallback((_url: string) => {}, []);
+
   const handleReset = useCallback(() => {
     if (stepTimerRef.current) clearInterval(stepTimerRef.current);
-    abortControllerRef.current?.abort();
+    if (pollTimerRef.current) clearInterval(pollTimerRef.current);
     setState(INITIAL_STATE);
   }, []);
 
   return (
     <div style={{ position: 'relative', minHeight: '100vh' }}>
-      {/* Decorative background orbs */}
       <FloatingOrbs />
-
-      {/* Sticky navigation */}
       <Navigation onLogoClick={handleReset} />
-
-      {/* Main content */}
       <main style={{ position: 'relative', zIndex: 10 }}>
         <Hero
           appState={state.appState}
@@ -265,7 +186,6 @@ export default function App() {
           startTime={state.startTime}
           videoUrl={state.videoUrl}
         />
-
         {state.appState === 'IDLE' && (
           <>
             <HowItWorks />
