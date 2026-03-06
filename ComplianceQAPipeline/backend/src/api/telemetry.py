@@ -48,7 +48,8 @@ def setup_telemetry():
         # 2. Starts background thread to send data to Azure
         configure_azure_monitor(
             connection_string=connection_string,  # Where to send data
-            logger_name="brand-guardian-tracer"   # Optional: custom tracer name
+            logger_name="brand-guardian-tracer",  # Optional: custom tracer name
+            service_name="VisionAudit AI",
         )
         # 
         logger.info(" Azure Monitor Tracking Enabled & Connected!")
