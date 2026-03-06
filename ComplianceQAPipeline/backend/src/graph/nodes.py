@@ -67,118 +67,69 @@ def index_video_node(state: VideoAuditState)  -> Dict[str,Any]:
 
         }
 
-# NODE 2: Compliance Auditor
-def audit_content_node(state:VideoAuditState)  -> Dict[str,Any]:
-    '''Performs Retrieval Augmented Generation to audit the content - brand video'''
-
-    logger.info("----[Node: Auditor] querying Knowledge base & LLM")
-
-    # Surface indexer errors instead of hiding them behind a generic message
-    indexer_errors = state.get("errors", [])
-    transcript = state.get("transcript") or ""
-    ocr_text_early = state.get("ocr_text", [])
-
-    if not transcript and not ocr_text_early:
-        if indexer_errors:
-            error_detail = "; ".join(indexer_errors)
-            logger.warning(f"No transcript/OCR — indexer reported errors: {error_detail}")
-            return {
-                "final_status": "FAIL",
-                "final_report": f"Video processing failed: {error_detail}"
-            }
-        logger.warning("No transcript or OCR text available. Skipping audit...")
+# ── Helper: run a single LLM compliance audit ──────────────────────────────
+def _run_single_audit(
+    llm, retrieved_rules: str, transcript: str, ocr_text: List,
+    video_metadata: dict, guideline_label: str, focus_instructions: str
+) -> dict:
+    '''Calls GPT-4o with a focused system prompt for one guideline set.'''
+    if not retrieved_rules.strip():
         return {
+            "compliance_results": [],
             "final_status": "FAIL",
-            "final_report": "Audit skipped: no transcript or on-screen text could be extracted from this video."
+            "final_report": f"No {guideline_label} rules found in knowledge base.",
         }
 
-    if not transcript:
-        logger.info("No transcript found — running audit on OCR text only.")
-
-    #initialise clients
-    llm = AzureChatOpenAI(
-        azure_deployment= os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME"),
-        openai_api_version = os.getenv("AZURE_OPENAI_API_VERSION"),
-        temperature = 0.0
-    )
-
-    embeddings = AzureOpenAIEmbeddings(
-        azure_deployment = "text-embedding-3-small",
-        openai_api_version = os.getenv("AZURE_OPENAI_API_VERSION")
-    )
-
-    vector_store = AzureSearch(
-        azure_search_endpoint = os.getenv("AZURE_AI_SEARCH_ENDPOINT"),
-        azure_search_key = os.getenv("AZURE_SEARCH_API_KEY"),
-        index_name = os.getenv("AZURE_SEARCH_INDEX_NAME"),
-        embedding_function = embeddings.embed_query
-
-    )
-    #RAG Retrieval
-    ocr_text = state.get("ocr_text",[])
-    query_text =f"{transcript} {''.join(ocr_text)}"
-    docs = vector_store.hybrid_search(query_text, k=3)
-    retrieved_rules = "\n\n".join([doc.page_content for doc in docs])
-    #
     system_prompt = f"""
-            You are a expert brand compliance auditor reviewing PAID BRAND ADVERTISEMENTS.
-            Your goal is to ensure the video content strictly adheres to the official regulatory and brand guidelines.
+You are an expert brand compliance auditor reviewing PAID BRAND ADVERTISEMENTS.
+Audit the video content ONLY against the {guideline_label} rules provided below.
 
-            OFFICIAL GUIDELINES & RULES (CITE THESE):
-            {retrieved_rules}
+OFFICIAL GUIDELINES ({guideline_label}):
+{retrieved_rules}
 
-            AUDIT INSTRUCTIONS:
-            1. Analyze the transcript and OCR text below carefully against EVERY rule provided in the "OFFICIAL GUIDELINES" section.
-            2. Identifying Violations:
-               - Only flag a violation if a SPECIFIC rule from the "OFFICIAL GUIDELINES" is clearly breached.
-               - CONTEXT: This video is already approved and actively running as a paid YouTube advertisement. It has passed YouTube's ad review process. Apply a reasonable, industry-standard lens — not an overly strict academic one.
-               - COSMETIC VS CLINICAL: Differentiate between standard beauty marketing (puffery) and actual clinical claims.
-                 - PERMISSIBLE LANGUAGE: Words like "radiance", "hydration", "glow", "illuminates complexion", "powerful benefits", "nourishing", "strengthening", and multiplier claims like "2x", "3x", "7x" used for cosmetic effect (e.g., "7x more hydration feel") are standard beauty marketing and must NOT be flagged.
-                 - CLINICAL CLAIMS: Only flag if the ad explicitly claims to treat, cure, or prevent a medical condition (e.g., "cures eczema", "treats acne clinically") OR cites a specific unsubstantiated consumer survey as proof of a medical outcome (e.g., "87% of dermatologists agree it treats psoriasis").
-                 - "Market research" or "studies show" used in a general cosmetic context (e.g., "studies show it boosts shine") is standard beauty marketing — do NOT flag unless a specific rule explicitly forbids it.
-               - MARKETING PUFFERY: Assume standard brand superlatives ("best", "amazing", "powerful", "transformative") are compliant for professional ads.
-               - DISCLOSURE EXCEPTION: Paid advertisements are labeled "Sponsored" by YouTube. Do not flag lack of on-screen disclosure as a violation unless a specific rule explicitly requires extra on-screen text for this exact format.
-               - When in doubt, do NOT flag. Only flag violations you are highly confident about.
-               - Provide a "timestamp" (MM:SS) where the violation occurs.
-            3. Classification:
-               - Categorize each violation based on the rule it breaks (e.g., "Disclosure", "Performance Claims", "Product Prominence").
-               - Assign SEVERITY:
-                 - CRITICAL: Dangerous, illegal, or grossly misleading.
-                 - MAJOR: Direct violation of a core regulatory rule.
-                 - MINOR: Technicality or small oversight (e.g., font size).
-            4. Summary Report:
-               - The "final_report" MUST be a summary of the findings (3-5 bullets).
-               - If zero violations found, congratulate the brand on compliance.
+AUDIT INSTRUCTIONS:
+1. Analyze the transcript and OCR text against EVERY rule in the OFFICIAL GUIDELINES above.
+2. Identifying Violations:
+   - Only flag a violation if a SPECIFIC rule from the OFFICIAL GUIDELINES is clearly breached.
+   - CONTEXT: This is a paid advertisement already running on YouTube. Apply a reasonable, industry-standard lens.
+   - COSMETIC VS CLINICAL: Standard beauty marketing puffery ("radiance", "hydration", "2x glow", "7x more shine") is allowed.
+     Only flag explicit clinical/medical claims (e.g., "cures eczema", "treats acne clinically").
+   - "Studies show" in a general cosmetic context is standard marketing — do NOT flag unless a rule explicitly forbids it.
+   - MARKETING PUFFERY: Superlatives ("best", "amazing", "powerful") are compliant for professional ads.
+   - When in doubt, do NOT flag. Only flag violations you are highly confident about.
+   - Provide a "timestamp" (MM:SS) where the violation occurs.
+{focus_instructions}
+3. Classification:
+   - Categorize each violation (e.g., "Disclosure", "Performance Claims", "Prohibited Content").
+   - Assign SEVERITY: CRITICAL (dangerous/illegal), MAJOR (core rule breach), MINOR (technicality).
+4. Summary Report: 3-5 bullet points. If zero violations, congratulate on compliance.
 
-            STRICT OUTPUT FORMAT (JSON ONLY):
-            {{
-                "compliance_results": [
-                    {{
-                        "category": "Category Name",
-                        "severity": "CRITICAL/MAJOR/MINOR",
-                        "description": "Specific explanation citing the broken rule.",
-                        "timestamp": "MM:SS"
-                    }}
-                ],
-                "status": "PASS or FAIL",
-                "final_report": "• Point 1\\n• Point 2"
-            }}
-            
-            NOTE: If "compliance_results" is empty, status MUST be "PASS". Otherwise "FAIL".
-            """
-    transcript_section = transcript if transcript else "[No spoken audio — transcript unavailable. Evaluate based on on-screen text only.]"
+STRICT OUTPUT FORMAT (JSON ONLY):
+{{
+    "compliance_results": [
+        {{
+            "category": "Category Name",
+            "severity": "CRITICAL/MAJOR/MINOR",
+            "description": "Specific explanation citing the broken rule.",
+            "timestamp": "MM:SS"
+        }}
+    ],
+    "status": "PASS or FAIL",
+    "final_report": "• Point 1\\n• Point 2"
+}}
+
+NOTE: If "compliance_results" is empty, status MUST be "PASS". Otherwise "FAIL".
+"""
+    transcript_section = transcript if transcript else "[No spoken audio — evaluate on OCR text only.]"
     user_message = f"""
-                VIDEO_METADATA: {state.get('video_metadata', {})}
-                TRANSCRIPT: {transcript_section}
-                ON-SCREEN TEXT (OCR): {ocr_text}
-                """
+VIDEO_METADATA: {video_metadata}
+TRANSCRIPT: {transcript_section}
+ON-SCREEN TEXT (OCR): {ocr_text}
+"""
+    response = None
     try:
-        response = llm.invoke([
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=user_message)
-        ])
+        response = llm.invoke([SystemMessage(content=system_prompt), HumanMessage(content=user_message)])
         content = response.content
-        # Strip markdown code fences: ```json ... ``` or '''json ... '''
         if "```" in content:
             match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", content)
             if match:
@@ -188,22 +139,120 @@ def audit_content_node(state:VideoAuditState)  -> Dict[str,Any]:
             if match:
                 content = match.group(1)
         audit_data = json.loads(content.strip())
-        results = audit_data.get("compliance_results",[])
-        
-        # Determine status based on presence of violations
-        final_status = "FAIL" if results else "PASS"
-
+        results = audit_data.get("compliance_results", [])
         return {
             "compliance_results": results,
-            "final_status": final_status,
-            "final_report": audit_data.get("final_report", "No report generated.")
+            "final_status": "FAIL" if results else "PASS",
+            "final_report": audit_data.get("final_report", "No report generated."),
+        }
+    except Exception as e:
+        logger.error(f"[{guideline_label}] Audit error: {e}")
+        logger.error(f"[{guideline_label}] Raw LLM response: {response.content if response else 'None'}")
+        return {
+            "compliance_results": [],
+            "final_status": "FAIL",
+            "final_report": f"Audit failed due to a system error: {e}",
         }
 
-    except Exception as e:
-        logger.error(f"System Error in Auditor Node: {str(e)}")
-        #logging the raw response 
-        logger.error(f"Raw LLM response: {response.content if 'response' in locals() else 'None'}")
-        return {
-            "errors": [str(e)],
-            "final_status": "FAIL"
-        }
+
+# NODE 2: Compliance Auditor
+def audit_content_node(state: VideoAuditState) -> Dict[str, Any]:
+    '''Runs two separate RAG+LLM compliance audits:
+       1. YouTube Ad Guidelines (youtube-ad-specs + Youtube_ad_guidelines PDFs)
+       2. Influencer Guidelines (influencer-guide PDF)
+    '''
+    logger.info("----[Node: Auditor] querying Knowledge base & LLM")
+
+    indexer_errors = state.get("errors", [])
+    transcript = state.get("transcript") or ""
+    ocr_text = state.get("ocr_text", [])
+
+    _fail_both = lambda msg: {
+        "youtube_compliance_results": [],
+        "youtube_final_status": "FAIL",
+        "youtube_final_report": msg,
+        "influencer_compliance_results": [],
+        "influencer_final_status": "FAIL",
+        "influencer_final_report": msg,
+    }
+
+    if not transcript and not ocr_text:
+        if indexer_errors:
+            error_detail = "; ".join(indexer_errors)
+            logger.warning(f"No transcript/OCR — indexer errors: {error_detail}")
+            return _fail_both(f"Video processing failed: {error_detail}")
+        logger.warning("No transcript or OCR available. Skipping audit.")
+        return _fail_both("Audit skipped: no transcript or on-screen text could be extracted.")
+
+    # ── Init LLM + vector store ────────────────────────────────────────────
+    llm = AzureChatOpenAI(
+        azure_deployment=os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME"),
+        openai_api_version=os.getenv("AZURE_OPENAI_API_VERSION"),
+        temperature=0.0,
+    )
+    embeddings = AzureOpenAIEmbeddings(
+        azure_deployment="text-embedding-3-small",
+        openai_api_version=os.getenv("AZURE_OPENAI_API_VERSION"),
+    )
+    vector_store = AzureSearch(
+        azure_search_endpoint=os.getenv("AZURE_AI_SEARCH_ENDPOINT"),
+        azure_search_key=os.getenv("AZURE_SEARCH_API_KEY"),
+        index_name=os.getenv("AZURE_SEARCH_INDEX_NAME"),
+        embedding_function=embeddings.embed_query,
+    )
+
+    # ── RAG: retrieve docs from all sources, then split by PDF origin ──────
+    query_text = f"{transcript} {''.join(ocr_text)}"
+    all_docs = vector_store.hybrid_search(query_text, k=20)
+
+    YOUTUBE_SOURCES = {"youtube-ad-specs.pdf", "Youtube_ad_guidelines.pdf"}
+    INFLUENCER_SOURCES = {"1001a-influencer-guide-508_1.pdf"}
+
+    youtube_docs = [d for d in all_docs if d.metadata.get("source", "") in YOUTUBE_SOURCES]
+    influencer_docs = [d for d in all_docs if d.metadata.get("source", "") in INFLUENCER_SOURCES]
+
+    # Fallback: targeted search if a source is under-represented
+    if len(youtube_docs) < 2:
+        extra = vector_store.hybrid_search("youtube advertisement policy brand safety content", k=10)
+        youtube_docs = [d for d in extra if d.metadata.get("source", "") in YOUTUBE_SOURCES][:5]
+    if len(influencer_docs) < 2:
+        extra = vector_store.hybrid_search("influencer marketing disclosure sponsorship transparency", k=10)
+        influencer_docs = [d for d in extra if d.metadata.get("source", "") in INFLUENCER_SOURCES][:5]
+
+    youtube_rules = "\n\n".join([d.page_content for d in youtube_docs])
+    influencer_rules = "\n\n".join([d.page_content for d in influencer_docs])
+    video_metadata = state.get("video_metadata", {})
+
+    logger.info(f"RAG: {len(youtube_docs)} YouTube docs, {len(influencer_docs)} Influencer docs retrieved.")
+
+    # ── Run both audits ────────────────────────────────────────────────────
+    yt_focus = """
+   YOUTUBE AD GUIDELINES FOCUS:
+   - Prohibited / restricted content categories (adult, dangerous, hate speech, etc.)
+   - Ad format and technical specification violations
+   - Brand safety and content policy issues
+   - Deceptive claims or misleading product representations
+"""
+    inf_focus = """
+   INFLUENCER GUIDELINES FOCUS:
+   - Mandatory sponsorship / paid partnership disclosure (#ad, #sponsored, clear labelling)
+   - Claim substantiation — any before/after, clinical efficacy, or survey-backed claims
+   - Transparency about the promotional relationship
+   - Authenticity requirements for endorsements
+"""
+
+    yt_result = _run_single_audit(llm, youtube_rules, transcript, ocr_text, video_metadata,
+                                  "YouTube Ad Guidelines", yt_focus)
+    inf_result = _run_single_audit(llm, influencer_rules, transcript, ocr_text, video_metadata,
+                                   "Influencer Guidelines", inf_focus)
+
+    logger.info(f"YouTube audit: {yt_result['final_status']} | Influencer audit: {inf_result['final_status']}")
+
+    return {
+        "youtube_compliance_results": yt_result["compliance_results"],
+        "youtube_final_status": yt_result["final_status"],
+        "youtube_final_report": yt_result["final_report"],
+        "influencer_compliance_results": inf_result["compliance_results"],
+        "influencer_final_status": inf_result["final_status"],
+        "influencer_final_report": inf_result["final_report"],
+    }

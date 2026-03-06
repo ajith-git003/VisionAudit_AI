@@ -20,15 +20,17 @@ class VideoAuditState(TypedDict):
     transcript: Optional[str]  # Fully extracted speech-to-text
     ocr_text: List[str]  
 
-    #analysis output
-    # stores the list of all the violations found by AI
-    compliance_results : Annotated[List[ComplianceIssue], operator.add]
+    # YouTube Ad Guidelines audit output
+    youtube_compliance_results: List[ComplianceIssue]
+    youtube_final_status: str   # PASS | FAIL
+    youtube_final_report: str
 
-    #final deliverables:
-    final_status: str #PASS | FAIL
-    final_report: str #markdown format
+    # Influencer Guidelines audit output
+    influencer_compliance_results: List[ComplianceIssue]
+    influencer_final_status: str  # PASS | FAIL
+    influencer_final_report: str
 
-    #sysytem observability 
-    #errors: API timeout, system level errors 
+    #sysytem observability
+    #errors: API timeout, system level errors
     #list of system level crashes
     errors : Annotated[List[str], operator.add]

@@ -17,11 +17,16 @@ export interface ComplianceIssue {
   timestamp: string | null;
 }
 
-export interface AuditResponse {
-  video_id: string;
+export interface AuditResultBlock {
   status: 'PASS' | 'FAIL';
   compliance_results: ComplianceIssue[];
-  report: string; // NOTE: "report" not "final_report"
+  report: string;
+}
+
+export interface AuditResponse {
+  video_id: string;
+  youtube_audit: AuditResultBlock;
+  influencer_audit: AuditResultBlock;
 }
 
 // ── Processing Pipeline ───────────────────────────────────────────────────────

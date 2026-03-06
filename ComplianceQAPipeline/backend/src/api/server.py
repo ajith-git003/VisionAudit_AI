@@ -53,11 +53,15 @@ class ComplianceIssueResponse(BaseModel):
     severity: str
     timestamp: Optional[str] = None
 
-class AuditResponse(BaseModel):
-    video_id: str
+class AuditResultBlock(BaseModel):
     status: str
     compliance_results: List[ComplianceIssueResponse]
     report: str
+
+class AuditResponse(BaseModel):
+    video_id: str
+    youtube_audit: AuditResultBlock
+    influencer_audit: AuditResultBlock
 
 class JobStatusResponse(BaseModel):
     job_id: str
@@ -84,14 +88,23 @@ def _run_pipeline(job_id: str, video_id: str, initial_state: dict, tmp_path: Opt
     try:
         logger.info(f"[Job {job_id}] Pipeline starting...")
         final_state = workflow_app.invoke(initial_state)
-        logger.info(f"[Job {job_id}] Pipeline complete: {final_state.get('final_status')}")
+        yt_status = final_state.get("youtube_final_status", "FAIL")
+        inf_status = final_state.get("influencer_final_status", "FAIL")
+        logger.info(f"[Job {job_id}] Pipeline complete — YouTube: {yt_status}, Influencer: {inf_status}")
         _jobs[job_id] = {
             "status": "complete",
             "result": {
                 "video_id": final_state.get("video_id", video_id),
-                "status": final_state.get("final_status", "FAIL"),
-                "compliance_results": final_state.get("compliance_results", []),
-                "report": final_state.get("final_report", "No report generated."),
+                "youtube_audit": {
+                    "status": yt_status,
+                    "compliance_results": final_state.get("youtube_compliance_results", []),
+                    "report": final_state.get("youtube_final_report", "No report generated."),
+                },
+                "influencer_audit": {
+                    "status": inf_status,
+                    "compliance_results": final_state.get("influencer_compliance_results", []),
+                    "report": final_state.get("influencer_final_report", "No report generated."),
+                },
             }
         }
     except Exception as e:
