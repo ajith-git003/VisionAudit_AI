@@ -201,27 +201,23 @@ def audit_content_node(state: VideoAuditState) -> Dict[str, Any]:
         embedding_function=embeddings.embed_query,
     )
 
-    # ── RAG: retrieve docs from all sources, then split by PDF origin ──────
-    query_text = f"{transcript} {''.join(ocr_text)}"
-    all_docs = vector_store.hybrid_search(query_text, k=20)
+    # ── RAG: two separate searches — one per guideline source ─────────────
+    # Using source-prefixed queries so hybrid search retrieves contextually
+    # relevant rules from the right PDF (k=5 keeps token count tight).
+    video_context = f"{transcript[:400]} {''.join(ocr_text[:5])}"
 
-    YOUTUBE_SOURCES = {"youtube-ad-specs.pdf", "Youtube_ad_guidelines.pdf"}
+    YOUTUBE_SOURCES   = {"youtube-ad-specs.pdf", "Youtube_ad_guidelines.pdf"}
     INFLUENCER_SOURCES = {"1001a-influencer-guide-508_1.pdf"}
 
-    youtube_docs = [d for d in all_docs if d.metadata.get("source", "") in YOUTUBE_SOURCES]
-    influencer_docs = [d for d in all_docs if d.metadata.get("source", "") in INFLUENCER_SOURCES]
+    raw_yt  = vector_store.hybrid_search(f"youtube ad policy brand safety {video_context}", k=6)
+    raw_inf = vector_store.hybrid_search(f"influencer marketing disclosure sponsorship {video_context}", k=6)
 
-    # Fallback: targeted search if a source is under-represented
-    if len(youtube_docs) < 2:
-        extra = vector_store.hybrid_search("youtube advertisement policy brand safety content", k=10)
-        youtube_docs = [d for d in extra if d.metadata.get("source", "") in YOUTUBE_SOURCES][:5]
-    if len(influencer_docs) < 2:
-        extra = vector_store.hybrid_search("influencer marketing disclosure sponsorship transparency", k=10)
-        influencer_docs = [d for d in extra if d.metadata.get("source", "") in INFLUENCER_SOURCES][:5]
+    youtube_docs   = [d for d in raw_yt  if d.metadata.get("source", "") in YOUTUBE_SOURCES][:5]
+    influencer_docs = [d for d in raw_inf if d.metadata.get("source", "") in INFLUENCER_SOURCES][:5]
 
-    youtube_rules = "\n\n".join([d.page_content for d in youtube_docs])
+    youtube_rules   = "\n\n".join([d.page_content for d in youtube_docs])
     influencer_rules = "\n\n".join([d.page_content for d in influencer_docs])
-    video_metadata = state.get("video_metadata", {})
+    video_metadata  = state.get("video_metadata", {})
 
     logger.info(f"RAG: {len(youtube_docs)} YouTube docs, {len(influencer_docs)} Influencer docs retrieved.")
 
