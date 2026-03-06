@@ -215,8 +215,9 @@ class VideoIndexerService:
             raise Exception(f"Failed to submit video URL to Azure VI: {response.text}")
         return response.json().get("id")
 
-    def wait_for_processing(self, video_id):
-        logger.info(f"Waiting for video {video_id} to process...")
+    def wait_for_processing(self, video_id, timeout_seconds=1800):
+        logger.info(f"Waiting for video {video_id} to process (timeout: {timeout_seconds}s)...")
+        deadline = time.time() + timeout_seconds
         while True:
             vi_token = self.get_account_access_token()
 
@@ -235,6 +236,9 @@ class VideoIndexerService:
                 raise Exception("Video processing failed in Azure.")
             elif state == "Quarantined":
                 raise Exception("Video has been quarantined (copyright/ content policy violation)")
+
+            if time.time() >= deadline:
+                raise Exception(f"Azure Video Indexer timed out after {timeout_seconds // 60} minutes (state: {state}).")
             logger.info(f"Current state: {state}. Checking again in 30 seconds...")
             time.sleep(30)
 
